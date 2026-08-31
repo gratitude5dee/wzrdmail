@@ -43,8 +43,15 @@ export function extractReplyText(text: string): string {
 
 /** Strip quoted history from HTML replies via common quote containers. */
 export function extractReplyHtml(html: string): string {
-  return html
-    .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, "")
+  let out = html;
+  // Remove innermost blockquotes repeatedly so nested quotes collapse fully.
+  const innermost = /<blockquote[^>]*>(?:(?!<blockquote)[\s\S])*?<\/blockquote>/gi;
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(innermost, "");
+  } while (out !== prev);
+  return out
     .replace(/<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*$/i, "")
     .trim();
 }

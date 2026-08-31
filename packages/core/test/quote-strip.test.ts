@@ -37,4 +37,12 @@ describe("extractReplyHtml", () => {
       extractReplyHtml('<p>Yes</p><div class="gmail_quote">old</div>')
     ).toBe("<p>Yes</p>");
   });
+
+  it("removes nested blockquotes without leaving stray markup", () => {
+    expect(
+      extractReplyHtml(
+        "<p>Yes</p><blockquote>gen1<blockquote>gen2<blockquote>gen3</blockquote></blockquote></blockquote>"
+      )
+    ).toBe("<p>Yes</p>");
+  });
 });

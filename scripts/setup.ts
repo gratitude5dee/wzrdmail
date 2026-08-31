@@ -83,10 +83,11 @@ function main(): void {
 
   // 2c. R2
   const bucketName = `wzrdmail-mail-${envName}`;
-  try {
-    wrangler(["r2", "bucket", "create", bucketName]);
-  } catch {
+  const bucketList = wrangler(["r2", "bucket", "list"]);
+  if (bucketList.includes(bucketName)) {
     console.log(`R2 bucket ${bucketName} already exists — ok`);
+  } else {
+    wrangler(["r2", "bucket", "create", bucketName]);
   }
 
   // 3. patch wrangler.jsonc ids for this env

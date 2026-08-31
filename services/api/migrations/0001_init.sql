@@ -152,7 +152,7 @@ CREATE TABLE idempotency_keys (
 );
 
 CREATE TABLE suppressions (
-  org_id TEXT, -- NULL = platform-level
+  org_id TEXT NOT NULL DEFAULT '', -- '' = platform-level scope
   address TEXT NOT NULL,
   reason TEXT NOT NULL CHECK (reason IN ('bounce','complaint','manual')),
   source_msg_id TEXT,
