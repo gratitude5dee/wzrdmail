@@ -5,6 +5,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-02-04",
   "compatibility_flags": ["nodejs_compat"],
+  // Local API worker (services/api) owns :8787; MCP dev binds :8788.
+  "dev": { "port": 8788 },
   "vars": {
     "API_BASE_URL": "http://localhost:8787"
   },

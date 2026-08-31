@@ -15,11 +15,15 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
  * endpoint table (reply/forward/drafts/search/usage/...).
  */
 export class ApiClient {
-  private readonly apiKey: string;
+  private readonly apiKey: string | (() => string);
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
 
-  constructor(options: { apiKey: string; baseUrl: string; fetchImpl?: FetchLike }) {
+  constructor(options: {
+    apiKey: string | (() => string);
+    baseUrl: string;
+    fetchImpl?: FetchLike;
+  }) {
     this.apiKey = options.apiKey;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -30,8 +34,9 @@ export class ApiClient {
     for (const [key, value] of Object.entries(req.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
+    const key = typeof this.apiKey === "function" ? this.apiKey() : this.apiKey;
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`
+      Authorization: `Bearer ${key}`
     };
     let body: string | undefined;
     if (req.body !== undefined) {
