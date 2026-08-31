@@ -8,11 +8,13 @@ export interface EmitEventInput {
   data: Record<string, unknown>;
 }
 
-/**
- * Write one immutable event row (§8.1). Queue fanout to webhooks/WS is M3;
- * until then the events table is the delivery log consumers poll.
- */
-export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<string> {
+export interface BuiltEvent {
+  event_id: string;
+  created_at: string;
+  values: [string, string, string, string, string | null, string, string];
+}
+
+export function buildEvent(input: EmitEventInput): BuiltEvent {
   const eventId = newId("evt");
   const createdAt = new Date().toISOString();
   const envelope = {
@@ -24,11 +26,10 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
     ...(input.inbox_id ? { inbox_id: input.inbox_id } : {}),
     data: input.data
   };
-  await db
-    .prepare(
-      "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(
+  return {
+    event_id: eventId,
+    created_at: createdAt,
+    values: [
       eventId,
       input.type,
       input.org_id,
@@ -36,9 +37,23 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
       input.inbox_id ?? null,
       JSON.stringify(envelope),
       createdAt
+    ]
+  };
+}
+
+/**
+ * Write one immutable event row (§8.1). Queue fanout to webhooks/WS is M3;
+ * until then the events table is the delivery log consumers poll.
+ */
+export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<string> {
+  const built = buildEvent(input);
+  await db
+    .prepare(
+      "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
+    .bind(...built.values)
     .run();
-  return eventId;
+  return built.event_id;
 }
 
 export async function bumpUsage(
