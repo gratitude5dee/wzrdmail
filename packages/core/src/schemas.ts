@@ -157,11 +157,16 @@ export type UpdateInboxInput = z.infer<typeof UpdateInboxInput>;
 export const UpdateMessageInput = z.object({
   labels: z.array(z.string()).optional(),
   add_labels: z.array(z.string()).optional(),
-  remove_labels: z.array(z.string()).optional()
+  remove_labels: z.array(z.string()).optional(),
+  read: z.boolean().optional()
 });
 export type UpdateMessageInput = z.infer<typeof UpdateMessageInput>;
 
-export const UpdateThreadInput = UpdateMessageInput;
+export const UpdateThreadInput = z.object({
+  labels: z.array(z.string()).optional(),
+  add_labels: z.array(z.string()).optional(),
+  remove_labels: z.array(z.string()).optional()
+});
 export type UpdateThreadInput = z.infer<typeof UpdateThreadInput>;
 
 export const BatchGetMessagesInput = z.object({
@@ -172,7 +177,8 @@ export type BatchGetMessagesInput = z.infer<typeof BatchGetMessagesInput>;
 export const BatchUpdateMessagesInput = z.object({
   message_ids: z.array(z.string()).min(1).max(100),
   add_labels: z.array(z.string()).optional(),
-  remove_labels: z.array(z.string()).optional()
+  remove_labels: z.array(z.string()).optional(),
+  read: z.boolean().optional()
 });
 export type BatchUpdateMessagesInput = z.infer<typeof BatchUpdateMessagesInput>;
 
@@ -181,7 +187,7 @@ export const Webhook = z.object({
   organization_id: z.string(),
   inbox_id: InboxId.nullable().optional(),
   url: z.string().url(),
-  secret: z.string(),
+  secret: z.string().optional(),
   enabled: z.boolean(),
   event_types: z.array(z.string()),
   client_id: z.string().nullable().optional(),

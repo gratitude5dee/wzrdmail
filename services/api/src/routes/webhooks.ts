@@ -103,7 +103,7 @@ async function listWebhooks(
   ).results;
   const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.webhook_id }));
   return c.json({
-    items: page.items.map(webhookJson),
+    webhooks: page.items.map((r) => webhookJson(r)),
     next_page_token: page.next_page_token ?? null
   });
 }
@@ -158,7 +158,7 @@ async function createWebhook(
           row.updated_at
         )
         .run();
-      return webhookJson(row);
+      return webhookJson(row, { includeSecret: true });
     }
   );
   return c.json(result, 201);

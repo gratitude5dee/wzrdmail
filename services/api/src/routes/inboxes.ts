@@ -63,7 +63,7 @@ inboxes.get("/inboxes", async (c) => {
       .all<InboxRow>()
   ).results;
   const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.inbox_id }));
-  return c.json({ items: page.items.map(inboxJson), next_page_token: page.next_page_token ?? null });
+  return c.json({ inboxes: page.items.map(inboxJson), next_page_token: page.next_page_token ?? null });
 });
 
 inboxes.post("/inboxes", async (c) => {

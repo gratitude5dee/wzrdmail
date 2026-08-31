@@ -118,7 +118,7 @@ messages.get("/inboxes/:inbox_id/messages", async (c) => {
   const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.msg_id }));
   const atts = await attachmentsFor(c.env.DB, page.items.map((r) => r.msg_id));
   return c.json({
-    items: page.items.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])),
+    messages: page.items.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])),
     next_page_token: page.next_page_token ?? null
   });
 });
@@ -150,7 +150,7 @@ messages.get("/inboxes/:inbox_id/messages/search", async (c) => {
   const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.msg_id }));
   const atts = await attachmentsFor(c.env.DB, page.items.map((r) => r.msg_id));
   return c.json({
-    items: page.items.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])),
+    messages: page.items.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])),
     next_page_token: page.next_page_token ?? null
   });
 });
@@ -169,7 +169,7 @@ messages.post("/inboxes/:inbox_id/messages/batch-get", async (c) => {
       .all<MessageRow>()
   ).results;
   const atts = await attachmentsFor(c.env.DB, rows.map((r) => r.msg_id));
-  return c.json({ items: rows.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])) });
+  return c.json({ messages: rows.map((r) => messageJson(r, atts.get(r.msg_id) ?? [])) });
 });
 
 messages.patch("/inboxes/:inbox_id/messages/batch-update", async (c) => {
