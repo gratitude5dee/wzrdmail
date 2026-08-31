@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+.wrangler/
+*.log
+.dev.vars
+scripts/config.toml
+.DS_Store
+coverage/

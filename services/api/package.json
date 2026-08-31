@@ -1,0 +1,29 @@
+{
+  "name": "@wzrdmail/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:prod": "wrangler deploy --env production"
+  },
+  "dependencies": {
+    "@wzrdmail/core": "workspace:*",
+    "hono": "^4.6.0",
+    "postal-mime": "^2.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.6.0",
+    "@cloudflare/workers-types": "^4.20250110.0",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.19.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.100.0"
+  }
+}

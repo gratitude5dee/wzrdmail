@@ -1,0 +1,23 @@
+# Copy to scripts/config.toml (gitignored) and fill in.
+# scripts/setup.ts reads this to provision resources and set Worker secrets.
+
+[cloudflare]
+account_id = ""
+# API token perms: Email Routing:Edit, Zone:Edit, DNS:Edit, Workers Scripts:Edit
+api_token = ""
+zone = "wzrd.tech"
+
+[secrets]
+# 32 bytes hex each; generate with: openssl rand -hex 32
+session_secret = ""
+otp_pepper = ""
+api_key_pepper = ""
+
+[stripe]
+secret_key = ""
+webhook_secret = ""
+price_developer = ""
+price_startup = ""
+
+[ops]
+platform_alert_email = ""
