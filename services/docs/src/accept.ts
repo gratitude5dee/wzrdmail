@@ -1,6 +1,7 @@
 /**
  * Minimal Accept-header negotiation: returns whether the given media
- * type is acceptable (present, case-insensitive, with q > 0).
+ * type is acceptable — i.e. any matching entry (case-insensitive,
+ * duplicates considered) carries q > 0 (or no q parameter).
  */
 export function accepts(header: string, mediaType: string): boolean {
   for (const part of header.split(",")) {
@@ -8,13 +9,12 @@ export function accepts(header: string, mediaType: string): boolean {
     if ((type ?? "").trim().toLowerCase() !== mediaType) {
       continue;
     }
-    for (const param of params) {
-      const [key, value] = param.trim().split("=");
-      if ((key ?? "").trim().toLowerCase() === "q") {
-        return Number.parseFloat((value ?? "").trim()) > 0;
-      }
+    const q = params
+      .map((param) => param.trim().split("="))
+      .find(([key]) => (key ?? "").trim().toLowerCase() === "q");
+    if (q === undefined || Number.parseFloat((q[1] ?? "").trim()) > 0) {
+      return true;
     }
-    return true;
   }
   return false;
 }

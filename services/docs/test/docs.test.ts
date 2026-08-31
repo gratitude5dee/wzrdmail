@@ -73,6 +73,16 @@ describe("markdown content negotiation", () => {
     expect(res.headers.get("Content-Type")).toContain("text/markdown");
   });
 
+  it("honors a later positive-q entry for a duplicated media type", async () => {
+    const res = await app.request(
+      "/quickstart",
+      { headers: { Accept: "text/markdown;q=0, text/markdown;q=0.5" } },
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/markdown");
+  });
+
   it("negotiates markdown on nested api pages", async () => {
     const res = await app.request(
       "/api/webhooks",

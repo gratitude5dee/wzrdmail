@@ -68,6 +68,15 @@ describe("landing page", () => {
     expect(res.headers.get("Content-Type")).toContain("text/html");
   });
 
+  it("honors a later positive-q entry for a duplicated media type", async () => {
+    const res = await app.request(
+      "/",
+      { headers: { Accept: "text/html;q=0, text/html;q=0.9" } },
+      env
+    );
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
   it("returns the error envelope on unknown routes", async () => {
     const res = await app.request("/nope", {}, env);
     expect(res.status).toBe(404);
