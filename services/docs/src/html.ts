@@ -15,7 +15,11 @@ function navGroups(): NavGroup[] {
   const getStarted: NavGroup = { label: "Get Started", items: [] };
   const apiRef: NavGroup = { label: "API Reference", items: [] };
   for (const page of PAGES) {
-    const item = { slug: page.slug, title: page.title, href: `/${page.slug}` };
+    const item = {
+      slug: page.slug,
+      title: page.title.replace(/^API Reference:\s*/, ""),
+      href: `/${page.slug}`
+    };
     if (page.slug.startsWith("api/")) {
       apiRef.items.push(item);
     } else {
