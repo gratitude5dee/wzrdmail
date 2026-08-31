@@ -11,10 +11,114 @@ export const SHARED_DOMAIN = "wzrd.tech";
 
 export type OtpPurpose = "agent_verify" | "console_login";
 
+/** Sentinel code_hash marking a code that thirdweb (not us) holds and verifies. */
+export const THIRDWEB_CODE = "thirdweb";
+
+const THIRDWEB_API = "https://api.thirdweb.com";
+
 function randomOtp(): string {
   const buf = new Uint32Array(1);
   crypto.getRandomValues(buf);
   return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
+}
+
+/** Ask thirdweb to email a login code to the address. */
+export async function thirdwebInitiate(env: Env, email: string): Promise<boolean> {
+  if (!env.THIRDWEB_CLIENT_ID) return false;
+  try {
+    const res = await fetch(`${THIRDWEB_API}/v1/auth/initiate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-client-id": env.THIRDWEB_CLIENT_ID },
+      body: JSON.stringify({ method: "email", email })
+    });
+    if (!res.ok) {
+      console.error(
+        JSON.stringify({ msg: "thirdweb_initiate_failed", status: res.status, body: await res.text() })
+      );
+    }
+    return res.ok;
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "thirdweb_initiate_failed", error: String(err) }));
+    return false;
+  }
+}
+
+/** Verify an emailed code with thirdweb. */
+export async function thirdwebComplete(env: Env, email: string, code: string): Promise<boolean> {
+  if (!env.THIRDWEB_CLIENT_ID) return false;
+  try {
+    const res = await fetch(`${THIRDWEB_API}/v1/auth/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-client-id": env.THIRDWEB_CLIENT_ID },
+      body: JSON.stringify({ method: "email", email, code })
+    });
+    return res.ok;
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "thirdweb_complete_failed", error: String(err) }));
+    return false;
+  }
+}
+
+/** Email a specific code through Cloudflare Email Service. */
+async function sendCodeEmail(
+  env: Env,
+  email: string,
+  purpose: OtpPurpose,
+  code: string
+): Promise<boolean> {
+  const mime = createMimeMessage();
+  const from = `noreply@${SHARED_DOMAIN}`;
+  mime.setSender(from);
+  mime.setTo(email);
+  mime.setSubject(
+    purpose === "console_login" ? "Your wzrdmail console sign-in code" : "Your wzrdmail verification code"
+  );
+  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
+  mime.addMessage({
+    contentType: "text/plain",
+    data:
+      purpose === "console_login"
+        ? `Your wzrdmail console sign-in code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
+        : `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
+  });
+  const provider = new CloudflareEmailProvider(env);
+  const recipient = email.toLowerCase();
+  try {
+    const outcome = await provider.send({ from, to: [recipient], raw: mime.asRaw() });
+    if (!outcome.accepted.includes(recipient)) {
+      console.error(
+        JSON.stringify({
+          msg: "otp_send_rejected",
+          error: outcome.rejected[0]?.error ?? "recipient not accepted"
+        })
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "otp_send_failed", error: String(err) }));
+    return false;
+  }
+}
+
+/**
+ * Deliver an OTP email without touching the database: thirdweb when
+ * configured (thirdweb holds the code), otherwise Cloudflare Email with a
+ * locally generated code. Returns the code hash to store, or null when
+ * delivery failed.
+ */
+export async function deliverOtp(
+  env: Env,
+  email: string,
+  purpose: OtpPurpose
+): Promise<string | null> {
+  const recipient = email.toLowerCase();
+  if (env.THIRDWEB_CLIENT_ID) {
+    return (await thirdwebInitiate(env, recipient)) ? THIRDWEB_CODE : null;
+  }
+  const code = randomOtp();
+  if (!(await sendCodeEmail(env, recipient, purpose, code))) return null;
+  return hashApiKey(code);
 }
 
 /**
@@ -28,40 +132,8 @@ export async function issueOtp(
   humanEmail: string,
   purpose: OtpPurpose
 ): Promise<boolean> {
-  const code = randomOtp();
-  const mime = createMimeMessage();
-  const from = `noreply@${SHARED_DOMAIN}`;
-  mime.setSender(from);
-  mime.setTo(humanEmail);
-  mime.setSubject(
-    purpose === "console_login" ? "Your wzrdmail console sign-in code" : "Your wzrdmail verification code"
-  );
-  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
-  mime.addMessage({
-    contentType: "text/plain",
-    data:
-      purpose === "console_login"
-        ? `Your wzrdmail console sign-in code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-        : `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-  });
-  const provider = new CloudflareEmailProvider(env);
-  const recipient = humanEmail.toLowerCase();
-  try {
-    const outcome = await provider.send({ from, to: [recipient], raw: mime.asRaw() });
-    if (!outcome.accepted.includes(recipient)) {
-      console.error(
-        JSON.stringify({
-          msg: "otp_send_rejected",
-          org_id: orgId,
-          error: outcome.rejected[0]?.error ?? "recipient not accepted"
-        })
-      );
-      return false;
-    }
-  } catch (err) {
-    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
-    return false;
-  }
+  const codeHash = await deliverOtp(env, humanEmail, purpose);
+  if (codeHash === null) return false;
 
   const now = new Date();
   await env.DB.prepare(
@@ -74,7 +146,7 @@ export async function issueOtp(
     .bind(
       orgId,
       purpose,
-      await hashApiKey(code),
+      codeHash,
       new Date(now.getTime() + OTP_TTL_MS).toISOString(),
       now.toISOString()
     )
@@ -90,7 +162,8 @@ export async function checkOtp(
   env: Env,
   orgId: string,
   purpose: OtpPurpose,
-  submitted: string
+  submitted: string,
+  email: string
 ): Promise<"ok" | "expired" | "exhausted" | "mismatch" | "missing"> {
   const row = await env.DB.prepare(
     "SELECT code_hash, expires_at FROM otp_codes WHERE org_id = ? AND purpose = ?"
@@ -108,7 +181,11 @@ export async function checkOtp(
     .bind(orgId, purpose, OTP_MAX_ATTEMPTS)
     .run();
   if (consumed.meta.changes === 0) return "exhausted";
-  if (row.code_hash !== (await hashApiKey(submitted))) return "mismatch";
+  if (row.code_hash === THIRDWEB_CODE) {
+    if (!(await thirdwebComplete(env, email.toLowerCase(), submitted))) return "mismatch";
+  } else if (row.code_hash !== (await hashApiKey(submitted))) {
+    return "mismatch";
+  }
   await env.DB.prepare("DELETE FROM otp_codes WHERE org_id = ? AND purpose = ?")
     .bind(orgId, purpose)
     .run();

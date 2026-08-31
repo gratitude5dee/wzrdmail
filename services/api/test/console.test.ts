@@ -419,3 +419,185 @@ describe("console login cooldown claim", () => {
     expect(after?.code_hash).toBe(before?.code_hash);
   });
 });
+
+describe("console signup", () => {
+  const post = (body: object) =>
+    app.request(
+      "/v0/console/signup",
+      { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } },
+      env
+    );
+
+  async function seedPendingSignup(email: string, username: string, code: string): Promise<void> {
+    const now = new Date();
+    await env.CACHE.put(
+      `signup_pending:${email}`,
+      JSON.stringify({
+        username,
+        org_name: null,
+        code_hash: await hashApiKey(code),
+        attempts: 0,
+        expires_at: new Date(now.getTime() + 600_000).toISOString(),
+        created_at: now.toISOString()
+      }),
+      { expirationTtl: 600 }
+    );
+  }
+
+  it("does not create any org, pod, or inbox before verification", async () => {
+    const email = `human-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `signup${crypto.randomUUID().slice(0, 8)}`;
+    const res = await post({ email, username });
+    expect(res.status).toBe(200);
+    // Local test env has no EMAIL binding, so delivery honestly fails.
+    const body = (await res.json()) as { delivered: boolean };
+    expect(body.delivered).toBe(false);
+    const org = await env.DB.prepare("SELECT org_id FROM organizations WHERE human_email = ?")
+      .bind(email)
+      .first();
+    expect(org).toBeNull();
+    const inbox = await env.DB.prepare("SELECT inbox_id FROM inboxes WHERE username = ?")
+      .bind(username)
+      .first();
+    expect(inbox).toBeNull();
+  });
+
+  it("rejects an already registered email", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare("SELECT human_email FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    const res = await post({ email: org?.human_email, username: `dupe${crypto.randomUUID().slice(0, 8)}` });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a taken username", async () => {
+    const seeded = await seedInbox();
+    const inbox = await env.DB.prepare("SELECT username FROM inboxes WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ username: string }>();
+    const res = await post({
+      email: `b-${crypto.randomUUID().slice(0, 8)}@example.com`,
+      username: inbox?.username
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects an invalid username", async () => {
+    const res = await post({ email: `c-${crypto.randomUUID().slice(0, 8)}@example.com`, username: "no spaces!" });
+    expect(res.status).toBe(400);
+  });
+
+  it("verify with a pending signup creates the verified org, pod, and inbox", async () => {
+    const email = `v-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `verif${crypto.randomUUID().slice(0, 8)}`;
+    await seedPendingSignup(email, username, "654321");
+    const verify = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, otp_code: "654321" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    expect(verify.status).toBe(200);
+    const body = (await verify.json()) as { organization_id: string };
+    const org = await env.DB.prepare("SELECT verified FROM organizations WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ verified: number }>();
+    expect(org?.verified).toBe(1);
+    const inbox = await env.DB.prepare("SELECT inbox_id FROM inboxes WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ inbox_id: string }>();
+    expect(inbox?.inbox_id).toBe(`${username}@wzrd.tech`);
+    const pod = await env.DB.prepare("SELECT pod_id FROM pods WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first();
+    expect(pod).not.toBeNull();
+    // Pending record is consumed: the same code cannot be replayed.
+    const replay = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, otp_code: "654321" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    expect(replay.status).toBe(401);
+  });
+
+  it("verify with a wrong code does not create anything", async () => {
+    const email = `w-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `wrong${crypto.randomUUID().slice(0, 8)}`;
+    await seedPendingSignup(email, username, "654321");
+    const verify = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, otp_code: "111111" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    expect(verify.status).toBe(401);
+    const org = await env.DB.prepare("SELECT org_id FROM organizations WHERE human_email = ?")
+      .bind(email)
+      .first();
+    expect(org).toBeNull();
+  });
+
+  it("caps pending-signup verification attempts", async () => {
+    const email = `x-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `caps${crypto.randomUUID().slice(0, 8)}`;
+    await seedPendingSignup(email, username, "654321");
+    for (let i = 0; i < 5; i++) {
+      await app.request(
+        "/v0/console/verify",
+        {
+          method: "POST",
+          body: JSON.stringify({ email, otp_code: "000000" }),
+          headers: { "content-type": "application/json" }
+        },
+        env
+      );
+    }
+    const res = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, otp_code: "654321" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("rate-limits repeated signups from the same IP", async () => {
+    const ip = `10.0.0.${Math.floor(Math.random() * 255)}`;
+    const request = () =>
+      app.request(
+        "/v0/console/signup",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: `r-${crypto.randomUUID().slice(0, 8)}@example.com`,
+            username: `rl${crypto.randomUUID().slice(0, 10)}`
+          }),
+          headers: { "content-type": "application/json", "cf-connecting-ip": ip }
+        },
+        env
+      );
+    let limited = false;
+    for (let i = 0; i < 12; i++) {
+      const res = await request();
+      if (res.status === 429) {
+        limited = true;
+        break;
+      }
+    }
+    expect(limited).toBe(true);
+  });
+});

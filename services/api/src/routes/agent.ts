@@ -13,7 +13,9 @@ import {
   OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_MS,
   SHARED_DOMAIN,
-  issueOtp
+  THIRDWEB_CODE,
+  issueOtp,
+  thirdwebComplete
 } from "../lib/otp.js";
 
 export const agent = new Hono<{ Bindings: Env }>();
@@ -170,7 +172,10 @@ agent.post("/agent/verify", async (c) => {
   if (consumed.meta.changes === 0) {
     throw new ApiError("forbidden", "too many attempts; request a new code");
   }
-  const matches = row.code_hash === (await hashApiKey(input.otp_code));
+  const matches =
+    row.code_hash === THIRDWEB_CODE
+      ? await thirdwebComplete(c.env, auth.human_email.toLowerCase(), input.otp_code)
+      : row.code_hash === (await hashApiKey(input.otp_code));
   if (!matches) {
     throw new ApiError("validation_error", "incorrect verification code");
   }

@@ -3,7 +3,9 @@ import { ApiRequestError, api } from "../api";
 
 export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [code, setCode] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [stage, setStage] = useState<"email" | "code">("email");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,6 +18,26 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
       setStage("code");
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "could not send the code");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signUp = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ delivered: boolean; message: string }>("/console/signup", {
+        method: "POST",
+        body: JSON.stringify({ email, username })
+      });
+      if (res.delivered) {
+        setStage("code");
+      } else {
+        setError(res.message);
+      }
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not create the account");
     } finally {
       setBusy(false);
     }
@@ -41,12 +63,16 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
     <div className="login-wrap">
       <div className="card login">
         <h1>wzrdmail console</h1>
-        <p className="dim">Sign in with the email that owns your organization.</p>
+        <p className="dim">
+          {mode === "signin"
+            ? "Sign in with the email that owns your organization."
+            : "Create an organization — pick your email and an inbox username."}
+        </p>
         {stage === "email" ? (
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void sendCode();
+              void (mode === "signin" ? sendCode() : signUp());
             }}
           >
             <div className="field">
@@ -59,8 +85,31 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
                 required
               />
             </div>
-            <button className="btn primary" disabled={busy || !email}>
-              {busy ? "Sending…" : "Send sign-in code"}
+            {mode === "signup" && (
+              <div className="field">
+                <label>Username</label>
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="yourname"
+                  required
+                />
+                <p className="dim">
+                  Your first inbox will be {(username || "yourname").toLowerCase()}@wzrd.tech
+                </p>
+              </div>
+            )}
+            <button
+              className="btn primary"
+              disabled={busy || !email || (mode === "signup" && !username)}
+            >
+              {busy
+                ? mode === "signin"
+                  ? "Sending…"
+                  : "Creating…"
+                : mode === "signin"
+                  ? "Send sign-in code"
+                  : "Create account"}
             </button>
           </form>
         ) : (
@@ -93,10 +142,37 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
         )}
         {error && <p className="error">{error}</p>}
         <p className="dim" style={{ marginTop: 16 }}>
-          No organization yet? Sign up via the API:{" "}
-          <a href="https://mail.wzrd.tech/docs" target="_blank" rel="noreferrer">
-            docs
-          </a>
+          {mode === "signin" ? (
+            <>
+              No organization yet?{" "}
+              <a
+                href="#signup"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setMode("signup");
+                  setStage("email");
+                  setError(null);
+                }}
+              >
+                Sign up
+              </a>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <a
+                href="#signin"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setMode("signin");
+                  setStage("email");
+                  setError(null);
+                }}
+              >
+                Sign in
+              </a>
+            </>
+          )}
         </p>
       </div>
     </div>

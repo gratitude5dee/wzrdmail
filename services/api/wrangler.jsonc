@@ -32,7 +32,7 @@
   ],
   "env": {
     "staging": {
-      "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset" },
+      "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4" },
       "workers_dev": true,
       "routes": [
         { "pattern": "staging.api.wzrd.tech", "custom_domain": true }
@@ -54,7 +54,7 @@
       "send_email": [{ "name": "EMAIL" }]
     },
     "production": {
-      "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset" },
+      "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4" },
       "workers_dev": true,
       "routes": [{ "pattern": "api.wzrd.tech", "custom_domain": true }],
       "d1_databases": [
