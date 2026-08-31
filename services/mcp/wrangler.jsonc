@@ -1,0 +1,42 @@
+// wzrdmail MCP Worker (§9): McpAgent over Streamable HTTP at /mcp → mcp.wzrd.tech.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wzrdmail-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "API_BASE_URL": "http://localhost:8787"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_OBJECT",
+        "class_name": "WzrdmailMcp"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WzrdmailMcp"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "vars": { "API_BASE_URL": "https://staging.api.wzrd.tech" },
+      "workers_dev": true,
+      "routes": [{ "pattern": "staging.mcp.wzrd.tech", "custom_domain": true }],
+      "durable_objects": {
+        "bindings": [{ "name": "MCP_OBJECT", "class_name": "WzrdmailMcp" }]
+      }
+    },
+    "production": {
+      "vars": { "API_BASE_URL": "https://api.wzrd.tech" },
+      "routes": [{ "pattern": "mcp.wzrd.tech", "custom_domain": true }],
+      "durable_objects": {
+        "bindings": [{ "name": "MCP_OBJECT", "class_name": "WzrdmailMcp" }]
+      }
+    }
+  }
+}
