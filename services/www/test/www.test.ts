@@ -17,7 +17,7 @@ describe("landing page", () => {
     const body = await res.text();
     expect(body).toContain("Email for AI agents");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
-    expect(body).toContain(`href="/docs"`);
+    expect(body).toContain("https://docs.mail.wzrd.tech");
     expect(body).toContain("https://console.wzrd.tech");
   });
 
@@ -77,18 +77,15 @@ describe("landing page", () => {
     expect(res.headers.get("Content-Type")).toContain("text/html");
   });
 
-  it("forwards /docs to the bound docs Worker", async () => {
-    const seen: string[] = [];
-    const docs: Fetcher = {
-      fetch: (input: RequestInfo | URL) => {
-        seen.push(new Request(input).url);
-        return Promise.resolve(new Response("docs page"));
-      }
-    } as Fetcher;
-    const res = await app.request("/docs/quickstart", {}, { ...env, DOCS: docs });
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("docs page");
-    expect(seen[0]).toContain("/docs/quickstart");
+  it("301s /docs paths to docs.mail.wzrd.tech", async () => {
+    const root = await app.request("/docs", {}, env);
+    expect(root.status).toBe(301);
+    expect(root.headers.get("Location")).toBe("https://docs.mail.wzrd.tech/");
+    const page = await app.request("/docs/quickstart", {}, env);
+    expect(page.status).toBe(301);
+    expect(page.headers.get("Location")).toBe(
+      "https://docs.mail.wzrd.tech/quickstart"
+    );
   });
 
   it("returns the error envelope on unknown routes", async () => {

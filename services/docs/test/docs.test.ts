@@ -137,7 +137,7 @@ describe("llms.txt routes", () => {
     const body = await res.text();
     expect(body).toContain("# wzrdmail");
     for (const page of PAGES) {
-      expect(body).toContain(`https://mail.wzrd.tech/docs/${page.slug}.md`);
+      expect(body).toContain(`https://docs.mail.wzrd.tech/${page.slug}.md`);
     }
   });
 

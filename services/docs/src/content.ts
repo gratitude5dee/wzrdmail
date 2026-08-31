@@ -485,12 +485,12 @@ export function llmsTxt(): string {
 ## Docs
 
 ${PAGES.map(
-    (p) => `- [${p.title}](https://mail.wzrd.tech/docs/${p.slug}.md): ${p.description}`
+    (p) => `- [${p.title}](https://docs.mail.wzrd.tech/${p.slug}.md): ${p.description}`
   ).join("\n")}
 
 ## Optional
 
-- [Full corpus](https://mail.wzrd.tech/docs/llms-full.txt): every docs page as one markdown file
+- [Full corpus](https://docs.mail.wzrd.tech/llms-full.txt): every docs page as one markdown file
 `;
 }
 

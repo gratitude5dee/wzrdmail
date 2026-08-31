@@ -40,8 +40,8 @@ Authorization: Bearer $WZRDMAIL_API_KEY.
 
 ## Docs
 
-- [Docs index](https://mail.wzrd.tech/docs/llms.txt)
-- [Full docs corpus](https://mail.wzrd.tech/docs/llms-full.txt)
-- [Quickstart](https://mail.wzrd.tech/docs/quickstart.md)
-- [Migrate from AgentMail](https://mail.wzrd.tech/docs/migrate-from-agentmail.md)
+- [Docs index](https://docs.mail.wzrd.tech/llms.txt)
+- [Full docs corpus](https://docs.mail.wzrd.tech/llms-full.txt)
+- [Quickstart](https://docs.mail.wzrd.tech/quickstart.md)
+- [Migrate from AgentMail](https://docs.mail.wzrd.tech/migrate-from-agentmail.md)
 `;

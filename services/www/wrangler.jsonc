@@ -1,11 +1,12 @@
-// wzrdmail landing Worker → mail.wzrd.tech (§14.2 of goal.md); the docs
-// Worker is mounted under /docs through the DOCS service binding.
+// wzrdmail landing Worker → mail.wzrd.tech (§14.2 of goal.md); /docs paths
+// 301 to the docs Worker at docs.mail.wzrd.tech.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wzrdmail-www",
   "main": "src/index.ts",
   "compatibility_date": "2025-02-04",
   "compatibility_flags": ["nodejs_compat"],
+  "rules": [{ "type": "Data", "globs": ["**/*.png", "**/*.ico"], "fallthrough": true }],
   "vars": {
     "WZRDMAIL_ENV": "dev"
   },
@@ -13,17 +14,11 @@
     "staging": {
       "vars": { "WZRDMAIL_ENV": "staging" },
       "workers_dev": true,
-      "services": [
-        { "binding": "DOCS", "service": "wzrdmail-docs-staging" }
-      ],
       "routes": [{ "pattern": "staging.mail.wzrd.tech", "custom_domain": true }]
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod" },
       "workers_dev": true,
-      "services": [
-        { "binding": "DOCS", "service": "wzrdmail-docs-production" }
-      ],
       "routes": [{ "pattern": "mail.wzrd.tech", "custom_domain": true }]
     }
   }
