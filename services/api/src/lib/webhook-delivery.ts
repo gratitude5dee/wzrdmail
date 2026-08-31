@@ -1,10 +1,10 @@
 import { newId, signWebhook } from "@wzrdmail/core";
 import type { Env } from "../env.js";
 
-export const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = 6;
 
-/** Backoff before attempt N+1, indexed by the attempt that just failed. */
-export const RETRY_BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000] as const;
+/** Backoff before attempt N+1, indexed by the attempt that just failed (§8.2). */
+export const RETRY_BACKOFF_MS = [30_000, 300_000, 1_800_000, 7_200_000, 28_800_000] as const;
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const SWEEP_BATCH = 25;
@@ -63,14 +63,15 @@ function eventMatches(eventTypes: string, type: string): boolean {
 }
 
 /**
- * Enqueue one pending delivery row per subscribed webhook. Rows are durable
- * before any HTTP happens, so a crash between enqueue and attempt can never
- * drop an event — the sweep picks the row up by its due time.
+ * Build one pending-delivery insert per subscribed webhook, for the caller to
+ * batch atomically with the event insert. Rows are durable before any HTTP
+ * happens, so a crash between enqueue and attempt can never drop an event —
+ * the sweep picks the row up by its due time.
  */
-export async function enqueueDeliveries(
+export async function deliveryEnqueueStatements(
   db: D1Database,
   event: { event_id: string; type: string; org_id: string; inbox_id?: string }
-): Promise<void> {
+): Promise<D1PreparedStatement[]> {
   const hooks = (
     await db
       .prepare(
@@ -81,18 +82,15 @@ export async function enqueueDeliveries(
       .bind(event.org_id, event.inbox_id ?? null)
       .all<{ webhook_id: string; event_types: string }>()
   ).results.filter((h) => eventMatches(h.event_types, event.type));
-  if (hooks.length === 0) return;
   const now = new Date().toISOString();
-  await db.batch(
-    hooks.map((h) =>
-      db
-        .prepare(
-          `INSERT INTO webhook_deliveries
-             (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 1, 0, 'pending', ?, ?, ?)`
-        )
-        .bind(newId("whd"), h.webhook_id, event.org_id, event.event_id, event.type, now, now, now)
-    )
+  return hooks.map((h) =>
+    db
+      .prepare(
+        `INSERT INTO webhook_deliveries
+           (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 0, 'pending', ?, ?, ?)`
+      )
+      .bind(newId("whd"), h.webhook_id, event.org_id, event.event_id, event.type, now, now, now)
   );
 }
 
@@ -126,6 +124,7 @@ async function attemptHttp(
       method: "POST",
       headers: { ...custom, "content-type": "application/json", ...signed },
       body: payload,
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
     return {
@@ -172,31 +171,31 @@ async function runDelivery(env: Env, row: DeliveryRow): Promise<void> {
   const outcome = await attemptHttp(webhook, row.event_id, event.payload);
   const done = new Date().toISOString();
   const retryable = !outcome.ok && row.manual === 0 && row.attempt < MAX_ATTEMPTS;
-  await env.DB.prepare(
+  const finalize = env.DB.prepare(
     `UPDATE webhook_deliveries
      SET status = ?, response_status = ?, error = ?, duration_ms = ?, next_retry_at = NULL, updated_at = ?
      WHERE delivery_id = ?`
-  )
-    .bind(
-      outcome.ok ? "success" : "failed",
-      outcome.response_status,
-      outcome.error,
-      outcome.duration_ms,
-      done,
-      row.delivery_id
-    )
-    .run();
+  ).bind(
+    outcome.ok ? "success" : "failed",
+    outcome.response_status,
+    outcome.error,
+    outcome.duration_ms,
+    done,
+    row.delivery_id
+  );
+  const statements = [finalize];
   if (retryable) {
     const backoff = RETRY_BACKOFF_MS[row.attempt - 1] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]!;
     const due = new Date(Date.now() + backoff).toISOString();
-    await env.DB.prepare(
-      `INSERT INTO webhook_deliveries
-         (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, ?)`
-    )
-      .bind(newId("whd"), row.webhook_id, row.org_id, row.event_id, row.event_type, row.attempt + 1, due, done, done)
-      .run();
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO webhook_deliveries
+           (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, ?)`
+      ).bind(newId("whd"), row.webhook_id, row.org_id, row.event_id, row.event_type, row.attempt + 1, due, done, done)
+    );
   }
+  await env.DB.batch(statements);
 }
 
 /**

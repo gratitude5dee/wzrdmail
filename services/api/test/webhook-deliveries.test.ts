@@ -7,6 +7,7 @@ import { emitEvent } from "../src/lib/events.js";
 import {
   DELIVERY_COLUMNS,
   MAX_ATTEMPTS,
+  RETRY_BACKOFF_MS,
   processDueDeliveries,
   pruneDeliveries,
   type DeliveryRow
@@ -144,6 +145,11 @@ describe("webhook delivery recording", () => {
     const hook = await createWebhook(key, "https://hooks.example.com/wh", ["message.sent"]);
     await emit(inbox);
     expect(await allDeliveries(hook.webhook_id)).toHaveLength(0);
+  });
+
+  it("uses the \u00a78.2 retry schedule: 30s, 5m, 30m, 2h, 8h, then stop", () => {
+    expect([...RETRY_BACKOFF_MS]).toEqual([30_000, 300_000, 1_800_000, 7_200_000, 28_800_000]);
+    expect(MAX_ATTEMPTS).toBe(1 + RETRY_BACKOFF_MS.length);
   });
 
   it("records a failure and schedules a backoff retry, up to the attempt cap", async () => {

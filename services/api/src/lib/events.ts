@@ -1,5 +1,5 @@
 import { newId, type EventType } from "@wzrdmail/core";
-import { enqueueDeliveries } from "./webhook-delivery.js";
+import { deliveryEnqueueStatements } from "./webhook-delivery.js";
 
 export interface EmitEventInput {
   type: EventType;
@@ -27,7 +27,7 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
     ...(input.inbox_id ? { inbox_id: input.inbox_id } : {}),
     data: input.data
   };
-  await db
+  const eventInsert = db
     .prepare(
       "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
@@ -39,14 +39,14 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
       input.inbox_id ?? null,
       JSON.stringify(envelope),
       createdAt
-    )
-    .run();
-  await enqueueDeliveries(db, {
+    );
+  const deliveryInserts = await deliveryEnqueueStatements(db, {
     event_id: eventId,
     type: input.type,
     org_id: input.org_id,
     inbox_id: input.inbox_id
   });
+  await db.batch([eventInsert, ...deliveryInserts]);
   return eventId;
 }
 
