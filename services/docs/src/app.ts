@@ -11,18 +11,40 @@ function wantsMarkdown(c: Context<{ Bindings: Env }>): boolean {
   return accepts(c.req.header("Accept") ?? "", "text/markdown");
 }
 
+/**
+ * The docs are mounted under a path prefix (`/docs` on mail.wzrd.tech), so
+ * every generated link is written relative to it. `index.ts` strips the
+ * prefix from the request before routing.
+ */
+export function basePath(env: Env): string {
+  return (env.DOCS_BASE_PATH ?? "").replace(/\/+$/, "");
+}
+
+/** Rewrite root-relative markdown links so content honors the mount prefix. */
+export function prefixRootLinks(markdown: string, prefix: string): string {
+  if (prefix === "") return markdown;
+  return markdown.replaceAll("](/", `](${prefix}/`);
+}
+
 function servePage(
   c: Context<{ Bindings: Env }>,
   page: DocPage,
   forceMarkdown: boolean
 ): Response {
+  const markdown = prefixRootLinks(page.markdown, basePath(c.env));
   if (forceMarkdown || wantsMarkdown(c)) {
-    return c.text(page.markdown, 200, {
+    return c.text(markdown, 200, {
       "Content-Type": "text/markdown; charset=utf-8"
     });
   }
   return c.html(
-    pageHtml(page.title, page.description, renderMarkdown(page.markdown), page.slug)
+    pageHtml(
+      page.title,
+      page.description,
+      renderMarkdown(markdown),
+      page.slug,
+      basePath(c.env)
+    )
   );
 }
 
@@ -34,14 +56,17 @@ export function createApp(): Hono<{ Bindings: Env }> {
   );
 
   app.get("/llms-full.txt", (c) =>
-    c.text(llmsFullTxt(), 200, { "Content-Type": "text/plain; charset=utf-8" })
+    c.text(prefixRootLinks(llmsFullTxt(), basePath(c.env)), 200, {
+      "Content-Type": "text/plain; charset=utf-8"
+    })
   );
 
   app.get("/health", (c) => c.json({ ok: true, env: c.env.WZRDMAIL_ENV }));
 
   app.get("/", (c) => {
+    const markdown = prefixRootLinks(INDEX_MARKDOWN, basePath(c.env));
     if (wantsMarkdown(c)) {
-      return c.text(INDEX_MARKDOWN, 200, {
+      return c.text(markdown, 200, {
         "Content-Type": "text/markdown; charset=utf-8"
       });
     }
@@ -49,14 +74,15 @@ export function createApp(): Hono<{ Bindings: Env }> {
       pageHtml(
         "wzrdmail docs",
         "Email for AI agents — docs for the wzrd.tech API, MCP, CLI, and SDKs.",
-        renderMarkdown(INDEX_MARKDOWN),
-        ""
+        renderMarkdown(markdown),
+        "",
+        basePath(c.env)
       )
     );
   });
 
   app.get("/index.md", (c) =>
-    c.text(INDEX_MARKDOWN, 200, {
+    c.text(prefixRootLinks(INDEX_MARKDOWN, basePath(c.env)), 200, {
       "Content-Type": "text/markdown; charset=utf-8"
     })
   );

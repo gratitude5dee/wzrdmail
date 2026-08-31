@@ -33,15 +33,15 @@ https://console.wzrd.tech and set it as WZRDMAIL_API_KEY.
 
 Step 3 — Connect via MCP or REST:
 
-    claude mcp add --transport http wzrdmail https://mcp.wzrd.tech/mcp
+    claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp
 
 or call the REST API directly at https://api.wzrd.tech/v0 with
 Authorization: Bearer $WZRDMAIL_API_KEY.
 
 ## Docs
 
-- [Docs index](https://docs.wzrd.tech/llms.txt)
-- [Full docs corpus](https://docs.wzrd.tech/llms-full.txt)
-- [Quickstart](https://docs.wzrd.tech/quickstart.md)
-- [Migrate from AgentMail](https://docs.wzrd.tech/migrate-from-agentmail.md)
+- [Docs index](https://mail.wzrd.tech/docs/llms.txt)
+- [Full docs corpus](https://mail.wzrd.tech/docs/llms-full.txt)
+- [Quickstart](https://mail.wzrd.tech/docs/quickstart.md)
+- [Migrate from AgentMail](https://mail.wzrd.tech/docs/migrate-from-agentmail.md)
 `;

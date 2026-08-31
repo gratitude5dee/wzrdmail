@@ -29,7 +29,7 @@ export interface RunIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const HELP = `wzrdmail — email for AI agents (https://docs.wzrd.tech)
+const HELP = `wzrdmail — email for AI agents (https://mail.wzrd.tech/docs)
 
 Usage: wzrdmail [--format json|table] <command>
 
