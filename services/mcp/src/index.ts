@@ -35,18 +35,28 @@ const withCors = (response: Response): Response => {
   });
 };
 
+/** Internal worker→DO route that reports whether a request's key matches the session's bound key. */
+export const VERIFY_SESSION_KEY_PATH = "/__verify-session-key";
+
 export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "wzrdmail", version: "0.0.1" });
 
   async init(): Promise<void> {
     const apiKey = this.props?.apiKey;
-    if (apiKey === undefined) throw new Error("missing auth props");
+    // Unbound sessions register nothing; sessionKeyGuard rejects all their traffic.
+    if (apiKey === undefined) return;
     const api = new ApiClient({ apiKey, baseUrl: this.env.API_BASE_URL });
     registerTools(this.server, api);
     registerResources(this.server);
   }
 
   override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === VERIFY_SESSION_KEY_PATH) {
+      return (
+        sessionKeyGuard(request, this.props?.apiKey) ?? Response.json({ ok: true })
+      );
+    }
     const rejection = sessionKeyGuard(request, this.props?.apiKey);
     if (rejection !== null) return rejection;
     return super.fetch(request);
@@ -80,6 +90,21 @@ export default {
           { status: 401 }
         )
       );
+    }
+    // The streamable-HTTP bridge turns any non-WebSocket DO response into a
+    // generic 500, so session-key mismatches must be rejected here, before the
+    // bridge opens — by asking the named session's DO to compare keys directly.
+    const sessionId = request.headers.get("mcp-session-id");
+    if (sessionId !== null) {
+      const stub = env.MCP_OBJECT.get(
+        env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)
+      );
+      const verification = await stub.fetch(
+        new Request(`https://mcp.internal${VERIFY_SESSION_KEY_PATH}`, {
+          headers: request.headers
+        })
+      );
+      if (verification.status !== 200) return withCors(verification);
     }
     (ctx as { props?: Props }).props = { apiKey };
     const response = await WzrdmailMcp.serve("/mcp").fetch(request, env, ctx);
