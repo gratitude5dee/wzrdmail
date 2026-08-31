@@ -23,3 +23,7 @@ setup env="dev":
 
 deploy env:
     pnpm --filter @wzrdmail/api deploy:{{env}}
+
+# M1 verification: seed inbox, send to PROBE_ADDRESS, reply, assert thread.
+demo-roundtrip env="staging":
+    npx tsx scripts/demo-roundtrip.ts {{env}}
