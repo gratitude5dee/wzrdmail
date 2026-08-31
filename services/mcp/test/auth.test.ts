@@ -2,7 +2,7 @@ import { WzrdmailError } from "wzrdmail";
 import { describe, expect, it } from "vitest";
 
 import { ApiClient } from "../src/api.js";
-import { extractApiKey } from "../src/auth.js";
+import { extractApiKey, sessionKeyGuard } from "../src/auth.js";
 
 const req = (headers: Record<string, string>): Request =>
   new Request("https://mcp.wzrd.tech/mcp", { method: "POST", headers });
@@ -21,6 +21,29 @@ describe("extractApiKey", () => {
     expect(extractApiKey(req({ authorization: "Bearer " }))).toBeNull();
     expect(extractApiKey(req({ authorization: "Bearer    " }))).toBeNull();
     expect(extractApiKey(req({}))).toBeNull();
+  });
+});
+
+describe("sessionKeyGuard", () => {
+  it("passes when the presented key matches the bound key", () => {
+    expect(sessionKeyGuard(req({ "x-api-key": "wm_owner" }), "wm_owner")).toBeNull();
+    expect(
+      sessionKeyGuard(req({ authorization: "Bearer wm_owner" }), "wm_owner")
+    ).toBeNull();
+  });
+
+  it("rejects a different valid key presented against a stolen session", async () => {
+    const rejection = sessionKeyGuard(req({ "x-api-key": "wm_attacker" }), "wm_owner");
+    expect(rejection?.status).toBe(401);
+    const body = (await rejection?.json()) as { name: string };
+    expect(body.name).toBe("unauthorized");
+  });
+
+  it("rejects missing credentials and an unbound session", () => {
+    expect(sessionKeyGuard(req({}), "wm_owner")?.status).toBe(401);
+    expect(sessionKeyGuard(req({ "x-api-key": "wm_owner" }), undefined)?.status).toBe(
+      401
+    );
   });
 });
 

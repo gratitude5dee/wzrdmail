@@ -1,9 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
-import { WzrdmailError } from "wzrdmail";
-
 import { ApiClient } from "./api.js";
-import { extractApiKey } from "./auth.js";
+import { extractApiKey, sessionKeyGuard } from "./auth.js";
 import { registerResources } from "./resources.js";
 import { registerTools } from "./tools.js";
 
@@ -41,26 +39,17 @@ export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "wzrdmail", version: "0.0.1" });
 
   async init(): Promise<void> {
-    const initialKey = this.props?.apiKey;
-    if (initialKey === undefined) throw new Error("missing auth props");
-    const api = new ApiClient({
-      // The session is bound to the key that created it: if a later request
-      // reaches this session with different credentials, tool calls fail
-      // instead of running with the original key.
-      apiKey: () => {
-        const presented = this.props?.apiKey ?? initialKey;
-        if (presented !== initialKey) {
-          throw new WzrdmailError(401, {
-            name: "unauthorized",
-            message: "api key does not match the key this MCP session was created with"
-          });
-        }
-        return initialKey;
-      },
-      baseUrl: this.env.API_BASE_URL
-    });
+    const apiKey = this.props?.apiKey;
+    if (apiKey === undefined) throw new Error("missing auth props");
+    const api = new ApiClient({ apiKey, baseUrl: this.env.API_BASE_URL });
     registerTools(this.server, api);
     registerResources(this.server);
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    const rejection = sessionKeyGuard(request, this.props?.apiKey);
+    if (rejection !== null) return rejection;
+    return super.fetch(request);
   }
 }
 
