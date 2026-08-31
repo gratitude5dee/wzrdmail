@@ -56,9 +56,13 @@ export function createApp(): Hono<{ Bindings: Env }> {
   });
 
   // §14.1: docs live on their own hostname; /docs paths 301 there.
-  const redirectToDocs = (c: { req: { path: string }; env: Env }): Response => {
+  const redirectToDocs = (c: {
+    req: { path: string; url: string };
+    env: Env;
+  }): Response => {
     const path = c.req.path === "/docs" ? "/" : c.req.path.slice("/docs".length);
-    return Response.redirect(`https://${docsHost(c.env)}${path}`, 301);
+    const search = new URL(c.req.url).search;
+    return Response.redirect(`https://${docsHost(c.env)}${path}${search}`, 301);
   };
   app.all("/docs", (c) => redirectToDocs(c));
   app.all("/docs/*", (c) => redirectToDocs(c));
