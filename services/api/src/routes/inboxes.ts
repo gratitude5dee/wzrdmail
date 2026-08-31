@@ -74,7 +74,7 @@ inboxes.post("/inboxes", async (c) => {
   const domain = (input.domain ?? SHARED_DOMAIN).toLowerCase();
   if (domain !== SHARED_DOMAIN) {
     const owned = await c.env.DB.prepare(
-      "SELECT domain_id FROM domains WHERE name = ? AND org_id = ? AND verified = 1"
+      "SELECT domain_id FROM domains WHERE name = ? AND org_id = ? AND status = 'verified'"
     )
       .bind(domain, auth.org_id)
       .first<{ domain_id: string }>();
