@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { accepts } from "./accept.js";
 import { findPage, INDEX_MARKDOWN, llmsFullTxt, llmsTxt } from "./content.js";
 import type { DocPage } from "./content.js";
 import type { Env } from "./env.js";
 import { renderMarkdown } from "./markdown.js";
 
 function wantsMarkdown(c: Context<{ Bindings: Env }>): boolean {
-  const accept = c.req.header("Accept") ?? "";
-  return accept.includes("text/markdown");
+  return accepts(c.req.header("Accept") ?? "", "text/markdown");
 }
 
 function pageHtml(title: string, description: string, body: string): string {

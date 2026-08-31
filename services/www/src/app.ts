@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { accepts } from "./accept.js";
 import type { Env } from "./env.js";
 import { LLMS_TXT } from "./llms.js";
 import { landingHtml } from "./page.js";
@@ -16,8 +17,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
     // §14.2: text/plain-ish agents (e.g. plain `curl wzrd.tech`) get the
     // llms.txt onboarding header as the root page's alternate; anything
     // that explicitly accepts text/html gets the landing page.
-    const accept = c.req.header("Accept") ?? "";
-    if (!accept.includes("text/html")) {
+    if (!accepts(c.req.header("Accept") ?? "", "text/html")) {
       return c.text(LLMS_TXT, 200, {
         "Content-Type": "text/plain; charset=utf-8"
       });

@@ -49,6 +49,25 @@ describe("landing page", () => {
     expect(body).toContain("If you are an AI agent");
   });
 
+  it("serves the onboarding header when text/html is rejected with q=0", async () => {
+    const res = await app.request(
+      "/",
+      { headers: { Accept: "text/html;q=0, */*" } },
+      env
+    );
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(await res.text()).toContain("If you are an AI agent");
+  });
+
+  it("matches text/html case-insensitively", async () => {
+    const res = await app.request(
+      "/",
+      { headers: { Accept: "TEXT/HTML;q=0.8" } },
+      env
+    );
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
   it("returns the error envelope on unknown routes", async () => {
     const res = await app.request("/nope", {}, env);
     expect(res.status).toBe(404);

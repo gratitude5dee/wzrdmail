@@ -53,6 +53,26 @@ describe("markdown content negotiation", () => {
     expect(await res.text()).toContain("# Migrate from AgentMail");
   });
 
+  it("does not serve markdown when text/markdown is rejected with q=0", async () => {
+    const res = await app.request(
+      "/quickstart",
+      { headers: { Accept: "text/markdown;q=0, text/html" } },
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  it("negotiates markdown case-insensitively and among weighted types", async () => {
+    const res = await app.request(
+      "/quickstart",
+      { headers: { Accept: "text/html;q=0.4, TEXT/MARKDOWN;q=0.9" } },
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/markdown");
+  });
+
   it("negotiates markdown on nested api pages", async () => {
     const res = await app.request(
       "/api/webhooks",
