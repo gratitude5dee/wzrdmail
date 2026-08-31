@@ -16,6 +16,7 @@ export const agent = new Hono<{ Bindings: Env }>();
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const SHARED_DOMAIN = "wzrd.tech";
 
 function randomToken(bytes: number): string {
@@ -30,9 +31,31 @@ function randomOtp(): string {
   return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
 }
 
-/** Stores a fresh OTP and emails it; returns whether delivery succeeded. */
+/**
+ * Emails a fresh OTP and stores it only after delivery succeeds, so a failed
+ * send leaves any previously delivered code valid. Returns whether delivery
+ * succeeded.
+ */
 async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<boolean> {
   const code = randomOtp();
+  const mime = createMimeMessage();
+  const from = `noreply@${SHARED_DOMAIN}`;
+  mime.setSender(from);
+  mime.setTo(humanEmail);
+  mime.setSubject("Your wzrdmail verification code");
+  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
+  mime.addMessage({
+    contentType: "text/plain",
+    data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
+  });
+  const provider = new CloudflareEmailProvider(env);
+  try {
+    await provider.send({ from, to: [humanEmail.toLowerCase()], raw: mime.asRaw() });
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
+    return false;
+  }
+
   const now = new Date();
   await env.DB.prepare(
     `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
@@ -48,25 +71,7 @@ async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<bo
       now.toISOString()
     )
     .run();
-
-  const mime = createMimeMessage();
-  const from = `noreply@${SHARED_DOMAIN}`;
-  mime.setSender(from);
-  mime.setTo(humanEmail);
-  mime.setSubject("Your wzrdmail verification code");
-  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
-  mime.addMessage({
-    contentType: "text/plain",
-    data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-  });
-  const provider = new CloudflareEmailProvider(env);
-  try {
-    await provider.send({ from, to: [humanEmail.toLowerCase()], raw: mime.asRaw() });
-    return true;
-  } catch (err) {
-    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
-    return false;
-  }
+  return true;
 }
 
 agent.post("/agent/sign-up", async (c) => {
@@ -147,6 +152,14 @@ agent.post("/agent/verify/resend", async (c) => {
   const auth = await authenticate(c);
   if (auth.org_verified) {
     throw new ApiError("conflict", "organization is already verified");
+  }
+  const pending = await c.env.DB.prepare(
+    "SELECT created_at FROM otp_codes WHERE org_id = ? AND purpose = 'agent_verify'"
+  )
+    .bind(auth.org_id)
+    .first<{ created_at: string }>();
+  if (pending && Date.now() - new Date(pending.created_at).getTime() < OTP_RESEND_COOLDOWN_MS) {
+    throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
   }
   const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
   if (!delivered) {
