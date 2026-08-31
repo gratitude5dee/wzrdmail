@@ -205,6 +205,17 @@ describe("usage and metrics", () => {
     expect(inboxes?.used).toBe(1);
     expect(inboxes?.limit).toBe(3);
   });
+
+  it("omits the point-in-time inboxes metric for past months", async () => {
+    const seeded = await seedInbox();
+    const key = await seedKey(seeded.org_id);
+    const res = await app.request("/v0/metrics/usage?month=2020-01", authed(key), env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { month: string; metrics: { metric: string }[] };
+    expect(body.month).toBe("2020-01");
+    expect(body.metrics.find((m) => m.metric === "inboxes")).toBeUndefined();
+    expect(body.metrics.find((m) => m.metric === "emails")).toBeDefined();
+  });
 });
 
 describe("pod-scoped api keys", () => {
@@ -244,6 +255,15 @@ describe("pod-scoped api keys", () => {
       env
     );
     expect(res.status).toBe(403);
+  });
+
+  it("a pod-scoped key cannot read org-wide usage metrics", async () => {
+    const seeded = await seedInbox();
+    const podKey = await seedPodKey(seeded.org_id, seeded.pod_id);
+    for (const path of ["/v0/usage", "/v0/metrics/usage", "/v0/metrics"]) {
+      const res = await app.request(path, authed(podKey), env);
+      expect(res.status).toBe(403);
+    }
   });
 });
 
