@@ -17,7 +17,20 @@ function unmount(request: Request, prefix: string): Request {
   return new Request(url, request);
 }
 
+/** Legacy docs hostnames 301 to the canonical mail.wzrd.tech/docs URLs. */
+function legacyRedirect(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (!url.hostname.startsWith("docs.") && !url.hostname.startsWith("staging.docs.")) {
+    return null;
+  }
+  const host = url.hostname.startsWith("staging.")
+    ? "staging.mail.wzrd.tech"
+    : "mail.wzrd.tech";
+  const path = url.pathname === "/" ? "" : url.pathname;
+  return Response.redirect(`https://${host}/docs${path}${url.search}`, 301);
+}
+
 export default {
   fetch: (request, env, ctx) =>
-    app.fetch(unmount(request, basePath(env)), env, ctx)
+    legacyRedirect(request) ?? app.fetch(unmount(request, basePath(env)), env, ctx)
 } satisfies ExportedHandler<Env>;
