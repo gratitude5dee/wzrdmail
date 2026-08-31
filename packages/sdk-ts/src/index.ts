@@ -8,13 +8,26 @@ export { DEFAULT_BASE_URL, type FetchLike } from "./http.js";
 export type {
   AgentSignUpResponse,
   AgentVerifyResponse,
+  ApiKey,
+  AuthMe,
+  CreateApiKeyInput,
   CreateDomainInput,
+  CreateDraftInput,
+  CreatePodInput,
   CreateWebhookInput,
   Domain,
+  Draft,
+  ForwardMessageInput,
   ListMessagesParams,
   ListParams,
   ListResponse,
-  Webhook
+  Pod,
+  ReplyMessageInput,
+  UpdateMessageInput,
+  Usage,
+  UsageMetric,
+  Webhook,
+  WebhookTestResult
 } from "./types.js";
 export type {
   Attachment,

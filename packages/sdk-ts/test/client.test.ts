@@ -328,4 +328,94 @@ describe("WzrdMailClient", () => {
       vi.useRealTimers();
     }
   });
+
+  it("deletes inboxes", async () => {
+    const { fetch, calls } = mockFetch([{ status: 204 }]);
+    await client(fetch).inboxes.delete("scout@wzrd.tech");
+    expect(calls[0]?.method).toBe("DELETE");
+    expect(calls[0]?.url.pathname).toBe("/v0/inboxes/scout%40wzrd.tech");
+  });
+
+  it("replies, replies-all, and forwards messages", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: {} }]);
+    const c = client(fetch);
+    await c.inboxes.messages.reply("i@wzrd.tech", "msg_1", { text: "re" });
+    await c.inboxes.messages.replyAll("i@wzrd.tech", "msg_1", { text: "re-all" });
+    await c.inboxes.messages.forward("i@wzrd.tech", "msg_1", {
+      to: ["x@y.com"]
+    });
+    expect(calls.map((c2) => c2.url.pathname)).toEqual([
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/reply",
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/reply-all",
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/forward"
+    ]);
+    expect(calls[2]?.body).toEqual({ to: ["x@y.com"] });
+  });
+
+  it("updates message labels/read via PATCH", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: {} }]);
+    await client(fetch).inboxes.messages.update("i@wzrd.tech", "msg_1", {
+      labels: ["read"],
+      read: true
+    });
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(calls[0]?.body).toEqual({ labels: ["read"], read: true });
+  });
+
+  it("searches threads with a query", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: { threads: [] } }]);
+    await client(fetch).inboxes.threads.search("i@wzrd.tech", {
+      query: "invoice",
+      limit: 10
+    });
+    expect(calls[0]?.url.pathname).toBe("/v0/inboxes/i%40wzrd.tech/threads/search");
+    expect(calls[0]?.url.searchParams.get("query")).toBe("invoice");
+    expect(calls[0]?.url.searchParams.get("limit")).toBe("10");
+  });
+
+  it("supports the draft lifecycle", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: {} }]);
+    const c = client(fetch);
+    await c.inboxes.drafts.list("i@wzrd.tech");
+    await c.inboxes.drafts.create("i@wzrd.tech", { to: ["x@y.com"], text: "hi" });
+    await c.inboxes.drafts.update("i@wzrd.tech", "draft_1", { subject: "s" });
+    await c.inboxes.drafts.send("i@wzrd.tech", "draft_1");
+    await c.inboxes.drafts.delete("i@wzrd.tech", "draft_1");
+    expect(calls.map((c2) => `${c2.method} ${c2.url.pathname}`)).toEqual([
+      "GET /v0/inboxes/i%40wzrd.tech/drafts",
+      "POST /v0/inboxes/i%40wzrd.tech/drafts",
+      "PATCH /v0/inboxes/i%40wzrd.tech/drafts/draft_1",
+      "POST /v0/inboxes/i%40wzrd.tech/drafts/draft_1/send",
+      "DELETE /v0/inboxes/i%40wzrd.tech/drafts/draft_1"
+    ]);
+  });
+
+  it("lists/creates/deletes pods and api keys", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: {} }]);
+    const c = client(fetch);
+    await c.pods.list();
+    await c.pods.create({ name: "prod" });
+    await c.pods.delete("pod_1");
+    await c.apiKeys.list();
+    await c.apiKeys.create({ name: "ci", pod_id: "pod_1" });
+    await c.apiKeys.delete("key_1");
+    expect(calls.map((c2) => `${c2.method} ${c2.url.pathname}`)).toEqual([
+      "GET /v0/pods",
+      "POST /v0/pods",
+      "DELETE /v0/pods/pod_1",
+      "GET /v0/api-keys",
+      "POST /v0/api-keys",
+      "DELETE /v0/api-keys/key_1"
+    ]);
+  });
+
+  it("exposes auth.me and metrics.usage", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: {} }]);
+    const c = client(fetch);
+    await c.auth.me();
+    await c.metrics.usage({ month: "2026-08" });
+    expect(calls[0]?.url.pathname).toBe("/v0/auth/me");
+    expect(calls[1]?.url.pathname).toBe("/v0/metrics/usage");
+    expect(calls[1]?.url.searchParams.get("month")).toBe("2026-08");
+  });
 });

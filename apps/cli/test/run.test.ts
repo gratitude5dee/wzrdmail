@@ -300,4 +300,144 @@ describe("wzrdmail CLI", () => {
     expect(code).toBe(EXIT_ERROR);
     expect(h.stderr.join("\n")).toContain("unknown command: bogus");
   });
+
+  it("inboxes delete issues DELETE and reports success", async () => {
+    const h = harness([{ status: 204 }]);
+    const code = await run(
+      ["--format", "json", "inboxes", "delete", "scout@wzrd.tech"],
+      h.io()
+    );
+    expect(code).toBe(EXIT_OK);
+    expect(h.calls[0]?.method).toBe("DELETE");
+    expect(h.calls[0]?.url.pathname).toBe("/v0/inboxes/scout%40wzrd.tech");
+    expect(JSON.parse(h.stdout.join("\n"))).toEqual({
+      deleted: true,
+      inbox_id: "scout@wzrd.tech"
+    });
+  });
+
+  it("messages reply / reply --all / forward hit the right endpoints", async () => {
+    const h = harness([{ status: 200, body: {} }]);
+    await run(["messages", "reply", "i@wzrd.tech", "msg_1", "--text", "re"], h.io());
+    await run(
+      ["messages", "reply", "i@wzrd.tech", "msg_1", "--text", "re", "--all"],
+      h.io()
+    );
+    await run(
+      ["messages", "forward", "i@wzrd.tech", "msg_1", "--to", "x@y.com"],
+      h.io()
+    );
+    expect(h.calls.map((c) => c.url.pathname)).toEqual([
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/reply",
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/reply-all",
+      "/v0/inboxes/i%40wzrd.tech/messages/msg_1/forward"
+    ]);
+    expect(h.calls[0]?.body).toEqual({ text: "re" });
+    expect(h.calls[2]?.body).toEqual({ to: ["x@y.com"] });
+  });
+
+  it("threads search requires --query and passes it through", async () => {
+    const h = harness([{ status: 200, body: { threads: [] } }]);
+    const bad = await run(["threads", "search", "i@wzrd.tech"], h.io());
+    expect(bad).toBe(EXIT_ERROR);
+    const code = await run(
+      ["threads", "search", "i@wzrd.tech", "--query", "invoice"],
+      h.io()
+    );
+    expect(code).toBe(EXIT_OK);
+    expect(h.calls[0]?.url.pathname).toBe("/v0/inboxes/i%40wzrd.tech/threads/search");
+    expect(h.calls[0]?.url.searchParams.get("query")).toBe("invoice");
+  });
+
+  it("drafts list/create/send", async () => {
+    const h = harness([{ status: 200, body: { drafts: [] } }]);
+    await run(["drafts", "list", "i@wzrd.tech"], h.io());
+    await run(
+      ["drafts", "create", "i@wzrd.tech", "--to", "x@y.com", "--text", "hi"],
+      h.io()
+    );
+    await run(["drafts", "send", "i@wzrd.tech", "draft_1"], h.io());
+    expect(h.calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+      "GET /v0/inboxes/i%40wzrd.tech/drafts",
+      "POST /v0/inboxes/i%40wzrd.tech/drafts",
+      "POST /v0/inboxes/i%40wzrd.tech/drafts/draft_1/send"
+    ]);
+    expect(h.calls[1]?.body).toEqual({ to: ["x@y.com"], text: "hi" });
+  });
+
+  it("webhooks create validates flags and posts the body", async () => {
+    const h = harness([{ status: 200, body: {} }]);
+    const bad = await run(["webhooks", "create", "--url", "https://x.example"], h.io());
+    expect(bad).toBe(EXIT_ERROR);
+    const code = await run(
+      [
+        "webhooks",
+        "create",
+        "--url",
+        "https://x.example",
+        "--event-types",
+        "message.received,message.sent"
+      ],
+      h.io()
+    );
+    expect(code).toBe(EXIT_OK);
+    expect(h.calls[0]?.body).toEqual({
+      url: "https://x.example",
+      event_types: ["message.received", "message.sent"]
+    });
+  });
+
+  it("webhooks test posts to the test endpoint", async () => {
+    const h = harness([
+      { status: 200, body: { webhook_id: "wh_1", delivered: true, status_code: 200 } }
+    ]);
+    const code = await run(["--format", "json", "webhooks", "test", "wh_1"], h.io());
+    expect(code).toBe(EXIT_OK);
+    expect(h.calls[0]?.method).toBe("POST");
+    expect(h.calls[0]?.url.pathname).toBe("/v0/webhooks/wh_1/test");
+    expect(JSON.parse(h.stdout.join("\n")).delivered).toBe(true);
+  });
+
+  it("domains records prints the dns_records table", async () => {
+    const h = harness([
+      {
+        status: 200,
+        body: {
+          domain_id: "dom_1",
+          domain: "acme.com",
+          status: "pending",
+          dns_records: [{ type: "MX", name: "acme.com", value: "mx.wzrd.tech" }],
+          created_at: "2026-08-31T00:00:00Z",
+          updated_at: "2026-08-31T00:00:00Z"
+        }
+      }
+    ]);
+    const code = await run(["domains", "records", "dom_1"], h.io());
+    expect(code).toBe(EXIT_OK);
+    expect(h.calls[0]?.url.pathname).toBe("/v0/domains/dom_1");
+    expect(h.stdout.join("\n")).toContain("mx.wzrd.tech");
+  });
+
+  it("pods, keys, and usage map to their endpoints", async () => {
+    const h = harness([
+      { status: 200, body: { pods: [] } },
+      { status: 200, body: {} },
+      { status: 200, body: { api_keys: [] } },
+      { status: 204 },
+      { status: 200, body: { month: "2026-08", metrics: [] } }
+    ]);
+    await run(["pods", "list"], h.io());
+    await run(["pods", "create", "--name", "prod"], h.io());
+    await run(["keys", "list"], h.io());
+    await run(["keys", "revoke", "key_1"], h.io());
+    await run(["usage", "--month", "2026-08"], h.io());
+    expect(h.calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+      "GET /v0/pods",
+      "POST /v0/pods",
+      "GET /v0/api-keys",
+      "DELETE /v0/api-keys/key_1",
+      "GET /v0/metrics/usage"
+    ]);
+    expect(h.calls[4]?.url.searchParams.get("month")).toBe("2026-08");
+  });
 });
