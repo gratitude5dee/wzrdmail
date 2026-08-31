@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import type { MailProvider, OutboundMime } from "@wzrdmail/core";
+import type { MailProvider, OutboundMime, SendOutcome } from "@wzrdmail/core";
 import { describe, expect, it } from "vitest";
 import { hashApiKey } from "../src/auth.js";
 import { sendMessage, type SendContext } from "../src/egress/send.js";
@@ -9,10 +9,15 @@ import { seedInbox, NOW } from "./helpers.js";
 class StubProvider implements MailProvider {
   sent: OutboundMime[] = [];
   fail = false;
-  send(msg: OutboundMime): Promise<{ providerMessageId: string }> {
+  failAddresses: string[] = [];
+  send(msg: OutboundMime): Promise<SendOutcome> {
     if (this.fail) return Promise.reject(new Error("provider says no"));
     this.sent.push(msg);
-    return Promise.resolve({ providerMessageId: "prov-1" });
+    const rejected = msg.to
+      .filter((a) => this.failAddresses.includes(a))
+      .map((address) => ({ address, error: "mailbox full" }));
+    const accepted = msg.to.filter((a) => !this.failAddresses.includes(a));
+    return Promise.resolve({ providerMessageId: "prov-1", accepted, rejected });
   }
   requiredDnsRecords(): never[] {
     return [];
@@ -160,6 +165,57 @@ describe("outbound pipeline (§6.2)", () => {
     });
     expect(result.thread_id).toBe("thread_o1");
   });
+
+  it("rejects overrides of transport-managed headers", async () => {
+    const inbox = await seedInbox();
+    await expect(
+      sendMessage(env, new StubProvider(), ctxFor(inbox), {
+        to: ["dest@example.com"],
+        cc: [],
+        bcc: [],
+        subject: "x",
+        text: "y",
+        headers: { From: "spoofed@example.com" },
+        labels: []
+      })
+    ).rejects.toMatchObject({ name: "validation_error" });
+  });
+
+  it("replays the stored response for a repeated client_id without re-sending", async () => {
+    const inbox = await seedInbox();
+    const provider = new StubProvider();
+    const input = {
+      to: ["dest@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "once",
+      text: "only once",
+      client_id: "cli-1",
+      labels: []
+    };
+    const first = await sendMessage(env, provider, ctxFor(inbox), input);
+    const second = await sendMessage(env, provider, ctxFor(inbox), input);
+    expect(second.message_id).toBe(first.message_id);
+    expect(provider.sent).toHaveLength(1);
+  });
+
+  it("keeps a partially delivered message sent and reports rejected recipients", async () => {
+    const inbox = await seedInbox();
+    const provider = new StubProvider();
+    provider.failAddresses = ["bad@example.com"];
+    const result = await sendMessage(env, provider, ctxFor(inbox), {
+      to: ["good@example.com", "bad@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "partial",
+      text: "hi",
+      labels: []
+    });
+    expect(result.state).toBe("sent");
+    expect(result.rejected_recipients).toEqual([
+      { address: "bad@example.com", error: "mailbox full" }
+    ]);
+  });
 });
 
 describe("POST /v0/inboxes/:id/messages/send", () => {
@@ -201,5 +257,27 @@ describe("POST /v0/inboxes/:id/messages/send", () => {
       .bind(body.message_id)
       .first<{ state: string }>();
     expect(msg?.state).toBe("rejected");
+  });
+
+  it("rejects send for a read-only key", async () => {
+    const inbox = await seedInbox();
+    const key = "wm_readonly_key";
+    await env.DB.prepare(
+      "INSERT INTO api_keys (key_id, org_id, key_hash, key_prefix, permissions, created_at) VALUES ('key_ro', ?, ?, 'wm_read', 'read', ?)"
+    )
+      .bind(inbox.org_id, await hashApiKey(key), NOW)
+      .run();
+    const app = createApp();
+    const res = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/send`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ to: ["dest@example.com"], subject: "hi", text: "hello" })
+      },
+      env
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ name: "forbidden" });
   });
 });

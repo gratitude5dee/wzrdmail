@@ -25,7 +25,30 @@ export interface SentMessage {
   thread_id: string;
   state: "sent" | "rejected";
   rfc822_message_id: string;
+  rejected_recipients?: { address: string; error: string }[];
 }
+
+/**
+ * Transport-managed headers callers may never override: doing so would let an
+ * authenticated key forge sender/recipient metadata or break threading.
+ */
+const PROTECTED_HEADERS = new Set([
+  "from",
+  "sender",
+  "to",
+  "cc",
+  "bcc",
+  "subject",
+  "reply-to",
+  "message-id",
+  "date",
+  "return-path",
+  "received",
+  "dkim-signature",
+  "mime-version",
+  "content-type",
+  "content-transfer-encoding"
+]);
 
 /**
  * Outbound pipeline (§6.2). Validations, MIME build, provider send, state
@@ -33,6 +56,50 @@ export interface SentMessage {
  * synchronously within the request.
  */
 export async function sendMessage(
+  env: Env,
+  provider: MailProvider,
+  ctx: SendContext,
+  input: SendMessageInput
+): Promise<SentMessage> {
+  if (input.client_id) {
+    const replay = await env.DB.prepare(
+      "SELECT response FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+    )
+      .bind(ctx.org_id, input.client_id)
+      .first<{ response: string }>();
+    if (replay) {
+      if (replay.response === "") {
+        throw new ApiError("conflict", "a request with this client_id is already in flight");
+      }
+      return JSON.parse(replay.response) as SentMessage;
+    }
+    // Reserve the key before any side effects so concurrent retries cannot
+    // both reach the provider.
+    const reserved = await env.DB.prepare(
+      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at)
+       VALUES (?, 'message', ?, '', ?) ON CONFLICT DO NOTHING`
+    )
+      .bind(ctx.org_id, input.client_id, new Date().toISOString())
+      .run();
+    if (reserved.meta.changes === 0) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
+    try {
+      return await doSend(env, provider, ctx, input);
+    } catch (err) {
+      // A failed request must not poison the client_id for retries.
+      await env.DB.prepare(
+        "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND response = ''"
+      )
+        .bind(ctx.org_id, input.client_id)
+        .run();
+      throw err;
+    }
+  }
+  return doSend(env, provider, ctx, input);
+}
+
+async function doSend(
   env: Env,
   provider: MailProvider,
   ctx: SendContext,
@@ -88,6 +155,9 @@ export async function sendMessage(
   mime.setHeader("Message-ID", rfc822MessageId);
   if (input.reply_to) mime.setHeader("Reply-To", input.reply_to);
   for (const [key, value] of Object.entries(input.headers ?? {})) {
+    if (PROTECTED_HEADERS.has(key.toLowerCase())) {
+      throw new ApiError("validation_error", `header ${key} cannot be overridden`);
+    }
     mime.setHeader(key, value);
   }
   if (input.text) mime.addMessage({ contentType: "text/plain", data: input.text });
@@ -126,6 +196,8 @@ export async function sendMessage(
     }
   }
   const participants = [...new Set([ctx.inbox_id.toLowerCase(), ...recipients])];
+  // The inbox itself is on every thread; using it for overlap would merge
+  // unrelated conversations that share a subject.
   const normalized = normalizeSubject(subject);
   const candidates = referencedThreadId
     ? []
@@ -148,11 +220,17 @@ export async function sendMessage(
         participants: JSON.parse(r.participants) as string[],
         last_message_at: r.last_message_at
       }));
-  const resolution = resolveThread({ referencedThreadId, subject, participants, candidates });
+  const resolution = resolveThread({
+    referencedThreadId,
+    subject,
+    participants: recipients,
+    candidates
+  });
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
   const preview = (input.text ?? "").slice(0, 140);
 
-  await env.MAIL.put(`raw/${ctx.inbox_id}/${msgId}.eml`, raw);
+  const rawR2Key = `raw/${ctx.inbox_id}/${msgId}.eml`;
+  await env.MAIL.put(rawR2Key, raw);
 
   const statements: D1PreparedStatement[] = [];
   if (resolution.kind === "new") {
@@ -179,15 +257,15 @@ export async function sendMessage(
       `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state,
          from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html,
          extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, client_id,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'outbound', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         raw_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'outbound', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msgId, ctx.org_id, ctx.pod_id, ctx.inbox_id, threadId,
       ctx.inbox_id, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc),
       subject, input.text ?? null, input.html ?? null,
       input.text ?? null, input.html ?? null,
       JSON.stringify(input.labels ?? []), rfc822MessageId,
-      refIds[0] ?? null, input.client_id ?? null, now, now
+      refIds[0] ?? null, input.client_id ?? null, rawR2Key, now, now
     )
   );
   statements.push(
@@ -200,9 +278,15 @@ export async function sendMessage(
 
   let state: SentMessage["state"];
   let providerError: string | null = null;
+  let rejectedRecipients: { address: string; error: string }[] = [];
   try {
-    await provider.send({ from: ctx.inbox_id, to: recipients, raw });
-    state = "sent";
+    const outcome = await provider.send({ from: ctx.inbox_id, to: recipients, raw });
+    rejectedRecipients = outcome.rejected;
+    // A partial failure is still a send: acceptances must not be erased.
+    state = outcome.accepted.length > 0 ? "sent" : "rejected";
+    if (state === "rejected" && outcome.rejected.length > 0) {
+      providerError = outcome.rejected.map((r) => `${r.address}: ${r.error}`).join("; ");
+    }
   } catch (err) {
     state = "rejected";
     providerError = String(err);
@@ -236,12 +320,27 @@ export async function sendMessage(
         created_at: now,
         updated_at: now
       },
-      ...(providerError ? { provider_error: providerError } : {})
+      ...(providerError ? { provider_error: providerError } : {}),
+      ...(rejectedRecipients.length > 0 ? { rejected_recipients: rejectedRecipients } : {})
     }
   });
 
   if (state === "rejected") {
     console.error(JSON.stringify({ msg: "send_rejected", msg_id: msgId, error: providerError }));
   }
-  return { message_id: msgId, thread_id: threadId, state, rfc822_message_id: rfc822MessageId };
+  const result: SentMessage = {
+    message_id: msgId,
+    thread_id: threadId,
+    state,
+    rfc822_message_id: rfc822MessageId,
+    ...(rejectedRecipients.length > 0 ? { rejected_recipients: rejectedRecipients } : {})
+  };
+  if (input.client_id) {
+    await env.DB.prepare(
+      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+    )
+      .bind(JSON.stringify(result), ctx.org_id, input.client_id)
+      .run();
+  }
+  return result;
 }

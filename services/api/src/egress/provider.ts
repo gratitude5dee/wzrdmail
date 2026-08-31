@@ -3,7 +3,8 @@ import type {
   DomainRecord,
   DomainVerification,
   MailProvider,
-  OutboundMime
+  OutboundMime,
+  SendOutcome
 } from "@wzrdmail/core";
 import type { Env } from "../env.js";
 
@@ -14,20 +15,27 @@ import type { Env } from "../env.js";
 export class CloudflareEmailProvider implements MailProvider {
   constructor(private readonly env: Env) {}
 
-  async send(msg: OutboundMime): Promise<{ providerMessageId: string }> {
+  async send(msg: OutboundMime): Promise<SendOutcome> {
     if (!this.env.EMAIL) {
       throw new Error("send_email binding EMAIL is not configured in this environment");
     }
     // "cloudflare:email" only exists in deployed runtimes with a send_email
     // binding; a static import would break local dev and tests.
     const { EmailMessage } = await import("cloudflare:email");
+    const accepted: string[] = [];
+    const rejected: { address: string; error: string }[] = [];
     for (const recipient of msg.to) {
-      await this.env.EMAIL.send(new EmailMessage(msg.from, recipient, msg.raw));
+      try {
+        await this.env.EMAIL.send(new EmailMessage(msg.from, recipient, msg.raw));
+        accepted.push(recipient);
+      } catch (err) {
+        rejected.push({ address: recipient, error: String(err) });
+      }
     }
     // Email Service reports accept/reject synchronously; the MIME
     // Message-ID is the durable correlation id for DSN reconciliation.
     const messageId = /^Message-ID:\s*<([^>]+)>/im.exec(msg.raw)?.[1] ?? crypto.randomUUID();
-    return { providerMessageId: messageId };
+    return { providerMessageId: messageId, accepted, rejected };
   }
 
   requiredDnsRecords(domain: DomainRecord): DnsRecord[] {
