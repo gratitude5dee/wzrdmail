@@ -52,6 +52,47 @@ usage.get("/usage", async (c) => {
   });
 });
 
+/** SDK/CLI contract (§goal.md): month + flat metric list vs plan limits. */
+usage.get("/metrics/usage", async (c) => {
+  const auth = await authenticate(c);
+  const org = await c.env.DB.prepare("SELECT plan FROM organizations WHERE org_id = ?")
+    .bind(auth.org_id)
+    .first<{ plan: string }>();
+  const plan = (org?.plan ?? "free") as PlanName;
+  const limits = PLANS[plan] ?? PLANS.free;
+  const month = c.req.query("month") ?? new Date().toISOString().slice(0, 7);
+  const counters = await c.env.DB.prepare(
+    "SELECT metric, value FROM usage_counters WHERE org_id = ? AND month = ?"
+  )
+    .bind(auth.org_id, month)
+    .all<{ metric: string; value: number }>();
+  const byMetric = new Map(counters.results.map((r) => [r.metric, r.value]));
+  const inboxCount = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM inboxes WHERE org_id = ? AND deleted_at IS NULL"
+  )
+    .bind(auth.org_id)
+    .first<{ n: number }>();
+  const cap = (n: number): number | null => (n === Number.MAX_SAFE_INTEGER ? null : n);
+  return c.json({
+    month,
+    metrics: [
+      { metric: "inboxes", used: inboxCount?.n ?? 0, limit: cap(limits.inboxes) },
+      {
+        metric: "emails",
+        used: (byMetric.get("emails_sent") ?? 0) + (byMetric.get("emails_received") ?? 0),
+        limit: cap(limits.emailsPerMonth)
+      },
+      { metric: "emails_sent", used: byMetric.get("emails_sent") ?? 0, limit: null },
+      { metric: "emails_received", used: byMetric.get("emails_received") ?? 0, limit: null },
+      {
+        metric: "storage_bytes",
+        used: byMetric.get("storage_bytes") ?? 0,
+        limit: cap(limits.storageBytes)
+      }
+    ]
+  });
+});
+
 /** Event-count aggregates bucketed by day (hour for 24h) for charts. */
 usage.get("/metrics", async (c) => {
   const auth = await authenticate(c);

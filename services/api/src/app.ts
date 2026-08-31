@@ -31,6 +31,23 @@ export function createApp(): Hono<{ Bindings: Env }> {
     })
   );
 
+  // CSRF guard: session cookies use SameSite=None (cross-origin console), so
+  // any state-changing request carrying one must come from a known console
+  // origin. API-key requests carry no cookie and are unaffected.
+  app.use("/v0/*", async (c, next) => {
+    const method = c.req.method;
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      const cookie = c.req.header("cookie") ?? "";
+      if (/(?:^|;\s*)wm_session=/.test(cookie)) {
+        const origin = c.req.header("origin");
+        if (!origin || !CONSOLE_ORIGINS.includes(origin)) {
+          throw new ApiError("forbidden", "cross-site request blocked");
+        }
+      }
+    }
+    await next();
+  });
+
   app.route("/v0", health);
   app.route("/v0", agent);
   app.route("/v0", consoleAuth);

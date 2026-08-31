@@ -278,7 +278,7 @@ async function doSend(
       env.DB.prepare(
         `INSERT INTO threads (thread_id, org_id, pod_id, inbox_id, subject, normalized_subject,
            preview, participants, labels, message_count, last_message_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 1, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '["sent"]', 1, ?, ?, ?)`
       ).bind(
         threadId, ctx.org_id, ctx.pod_id, ctx.inbox_id, subject, normalized,
         preview, JSON.stringify(participants), now, now, now
@@ -288,7 +288,10 @@ async function doSend(
     statements.push(
       env.DB.prepare(
         `UPDATE threads SET message_count = message_count + 1, last_message_at = ?,
-           preview = ?, updated_at = ? WHERE thread_id = ?`
+           preview = ?, updated_at = ?,
+           labels = CASE WHEN EXISTS (SELECT 1 FROM json_each(labels) WHERE value = 'sent')
+             THEN labels ELSE json_insert(labels, '$[#]', 'sent') END
+         WHERE thread_id = ?`
       ).bind(now, preview, now, threadId)
     );
   }

@@ -31,6 +31,23 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+const MAX_PAGES = 20;
+
+/** Follows `next_page_token` until the collection is exhausted (bounded). */
+export async function apiAll<T>(path: string, key: string): Promise<T[]> {
+  const sep = path.includes("?") ? "&" : "?";
+  const items: T[] = [];
+  let token: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const url = token ? `${path}${sep}page_token=${encodeURIComponent(token)}` : path;
+    const res = await api<Record<string, T[]> & { next_page_token?: string }>(url);
+    items.push(...(res[key] ?? []));
+    token = res.next_page_token;
+    if (!token) break;
+  }
+  return items;
+}
+
 export interface Session {
   organization_id: string;
   name: string;

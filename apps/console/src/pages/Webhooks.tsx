@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiRequestError, api, type Webhook } from "../api";
+import { ApiRequestError, api, apiAll, type Webhook } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const EVENT_CATALOG: { type: string; description: string }[] = [
@@ -26,8 +26,7 @@ export function WebhooksPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await api<{ webhooks: Webhook[] }>("/webhooks?limit=100");
-    setHooks(res.webhooks);
+    setHooks(await apiAll<Webhook>("/webhooks?limit=100", "webhooks"));
   }, []);
 
   useEffect(() => {

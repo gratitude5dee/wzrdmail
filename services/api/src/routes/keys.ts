@@ -41,12 +41,19 @@ function keyJson(row: KeyRow): Record<string, unknown> {
 keys.get("/api-keys", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
-  const rows = await c.env.DB.prepare(
-    `SELECT key_id, pod_id, name, key_prefix, permissions, last_used_at, created_at
-     FROM api_keys WHERE org_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
-  )
-    .bind(auth.org_id)
-    .all<KeyRow>();
+  const rows = auth.pod_id
+    ? await c.env.DB.prepare(
+        `SELECT key_id, pod_id, name, key_prefix, permissions, last_used_at, created_at
+         FROM api_keys WHERE org_id = ? AND pod_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
+      )
+        .bind(auth.org_id, auth.pod_id)
+        .all<KeyRow>()
+    : await c.env.DB.prepare(
+        `SELECT key_id, pod_id, name, key_prefix, permissions, last_used_at, created_at
+         FROM api_keys WHERE org_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
+      )
+        .bind(auth.org_id)
+        .all<KeyRow>();
   return c.json({ api_keys: rows.results.map(keyJson) });
 });
 
@@ -54,6 +61,14 @@ keys.post("/api-keys", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
   const input = await parseBody(c, CreateKeyInput);
+  // A pod-scoped credential may only mint keys for its own pod; letting it
+  // omit pod_id would grant the new key organization-wide access.
+  if (auth.pod_id) {
+    if (input.pod_id && input.pod_id !== auth.pod_id) {
+      throw new ApiError("forbidden", "pod-scoped keys can only create keys for their own pod");
+    }
+    input.pod_id = auth.pod_id;
+  }
   if (input.pod_id) {
     const pod = await c.env.DB.prepare("SELECT pod_id FROM pods WHERE pod_id = ? AND org_id = ?")
       .bind(input.pod_id, auth.org_id)
@@ -97,11 +112,17 @@ keys.post("/api-keys", async (c) => {
 keys.delete("/api-keys/:key_id", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
-  const result = await c.env.DB.prepare(
-    "UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND org_id = ? AND revoked_at IS NULL"
-  )
-    .bind(new Date().toISOString(), c.req.param("key_id"), auth.org_id)
-    .run();
+  const result = auth.pod_id
+    ? await c.env.DB.prepare(
+        "UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND org_id = ? AND pod_id = ? AND revoked_at IS NULL"
+      )
+        .bind(new Date().toISOString(), c.req.param("key_id"), auth.org_id, auth.pod_id)
+        .run()
+    : await c.env.DB.prepare(
+        "UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND org_id = ? AND revoked_at IS NULL"
+      )
+        .bind(new Date().toISOString(), c.req.param("key_id"), auth.org_id)
+        .run();
   if (result.meta.changes === 0) throw new ApiError("not_found", "no such API key");
   return c.json({ key_id: c.req.param("key_id"), revoked: true });
 });
