@@ -26,6 +26,7 @@ export interface RunIo {
   stderr: (line: string) => void;
   fetch?: FetchLike;
   webSocket?: WebSocketFactory;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const HELP = `wzrdmail — email for AI agents (https://docs.wzrd.tech)
@@ -66,7 +67,7 @@ Environment:
   WZRDMAIL_CONFIG_PATH  key store path (default ~/.config/wzrdmail/config.json)
 
 Flags:
-  --api-key wm_…     API key for this invocation (wins over env and config)
+  --api-key wm_…     API key for this invocation (env WZRDMAIL_API_KEY wins over it)
   --format json      machine-clean JSON on stdout (default: human table)
   --help             show this help`;
 
@@ -481,15 +482,20 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
         message: "events tail requires an API key (set WZRDMAIL_API_KEY or run wzrdmail login)"
       });
     }
+    const max = numberFlag(flags, "max");
+    if (max !== undefined && (!Number.isInteger(max) || max < 1)) {
+      throw new UsageError("--max must be a positive integer");
+    }
     await tailEvents({
       apiKey: ctx.apiKey,
       baseUrl: ctx.io.env["WZRDMAIL_BASE_URL"],
       inboxIds: listFlag(flags, "inbox-ids"),
-      max: numberFlag(flags, "max"),
+      max,
       onEvent: (line) => {
         ctx.io.stdout(line);
       },
-      webSocket: ctx.io.webSocket
+      webSocket: ctx.io.webSocket,
+      sleep: ctx.io.sleep
     });
     return;
   }
@@ -521,15 +527,15 @@ function errorExitCode(error: WzrdmailError): number {
   return EXIT_ERROR;
 }
 
-/** `--api-key` flag > `WZRDMAIL_API_KEY` env > stored config key (§10). */
+/** `WZRDMAIL_API_KEY` env always wins > `--api-key` flag > stored config key (§10). */
 function resolveApiKey(
   flags: Record<string, string | boolean>,
   env: Record<string, string | undefined>
 ): string | undefined {
-  const flagKey = flags["api-key"];
-  if (typeof flagKey === "string" && flagKey !== "") return flagKey;
   const envKey = env["WZRDMAIL_API_KEY"];
   if (envKey !== undefined && envKey !== "") return envKey;
+  const flagKey = flags["api-key"];
+  if (typeof flagKey === "string" && flagKey !== "") return flagKey;
   return readStoredApiKey(configPath(env));
 }
 
