@@ -399,3 +399,77 @@ describe("console login cooldown claim", () => {
     expect(after?.code_hash).toBe(before?.code_hash);
   });
 });
+
+describe("console signup", () => {
+  const post = (body: object) =>
+    app.request(
+      "/v0/console/signup",
+      { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } },
+      env
+    );
+
+  it("creates an org, default pod, and first inbox without an API key", async () => {
+    const email = `human-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `signup${crypto.randomUUID().slice(0, 8)}`;
+    const res = await post({ email, username });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { organization_id: string; inbox_id: string };
+    expect(body.inbox_id).toBe(`${username}@wzrd.tech`);
+    const org = await env.DB.prepare("SELECT human_email, verified FROM organizations WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ human_email: string; verified: number }>();
+    expect(org?.human_email).toBe(email);
+    expect(org?.verified).toBe(0);
+    const pod = await env.DB.prepare("SELECT pod_id FROM pods WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ pod_id: string }>();
+    expect(pod).not.toBeNull();
+    const inbox = await env.DB.prepare("SELECT inbox_id FROM inboxes WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ inbox_id: string }>();
+    expect(inbox?.inbox_id).toBe(body.inbox_id);
+  });
+
+  it("rejects an already registered email", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare("SELECT human_email FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    const res = await post({ email: org?.human_email, username: `dupe${crypto.randomUUID().slice(0, 8)}` });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a taken username", async () => {
+    const username = `taken${crypto.randomUUID().slice(0, 8)}`;
+    await post({ email: `a-${crypto.randomUUID().slice(0, 8)}@example.com`, username });
+    const res = await post({ email: `b-${crypto.randomUUID().slice(0, 8)}@example.com`, username });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects an invalid username", async () => {
+    const res = await post({ email: `c-${crypto.randomUUID().slice(0, 8)}@example.com`, username: "no spaces!" });
+    expect(res.status).toBe(400);
+  });
+
+  it("verify after signup marks the organization verified", async () => {
+    const email = `v-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const username = `verif${crypto.randomUUID().slice(0, 8)}`;
+    const res = await post({ email, username });
+    const body = (await res.json()) as { organization_id: string };
+    await seedConsoleOtp(body.organization_id, "654321");
+    const verify = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, otp_code: "654321" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    expect(verify.status).toBe(200);
+    const org = await env.DB.prepare("SELECT verified FROM organizations WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ verified: number }>();
+    expect(org?.verified).toBe(1);
+  });
+});

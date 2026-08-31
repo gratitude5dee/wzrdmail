@@ -1,16 +1,21 @@
-import { ApiError, newId } from "@wzrdmail/core";
+import { ApiError, newId, validateUsername } from "@wzrdmail/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import { SESSION_COOKIE, authenticate, hashApiKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { parseBody } from "../lib/http.js";
-import { OTP_RESEND_COOLDOWN_MS, checkOtp, issueOtp } from "../lib/otp.js";
+import { OTP_RESEND_COOLDOWN_MS, SHARED_DOMAIN, checkOtp, issueOtp } from "../lib/otp.js";
 
 export const consoleAuth = new Hono<{ Bindings: Env }>();
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const LoginInput = z.object({ email: z.string().email() });
+const SignupInput = z.object({
+  email: z.string().email(),
+  username: z.string().min(1).max(64),
+  org_name: z.string().min(1).max(120).optional()
+});
 const VerifyInput = z.object({ email: z.string().email(), otp_code: z.string().min(4).max(8) });
 
 function randomToken(bytes: number): string {
@@ -104,6 +109,64 @@ consoleAuth.post("/console/login", async (c) => {
   return c.json({ message: "If this email has an organization, a sign-in code is on its way." });
 });
 
+consoleAuth.post("/console/signup", async (c) => {
+  const input = await parseBody(c, SignupInput);
+  const humanEmail = input.email.toLowerCase();
+  const verdict = validateUsername(input.username);
+  if (!verdict.ok) {
+    throw new ApiError("validation_error", `username is ${verdict.reason}`);
+  }
+  const existingOrg = await findOrg(c.env, humanEmail);
+  if (existingOrg) {
+    throw new ApiError("conflict", "this email is already registered; sign in instead");
+  }
+  const inboxId = `${verdict.username}@${SHARED_DOMAIN}`;
+  const existingInbox = await c.env.DB.prepare(
+    "SELECT inbox_id FROM inboxes WHERE username = ? AND domain = ?"
+  )
+    .bind(verdict.username, SHARED_DOMAIN)
+    .first<{ inbox_id: string }>();
+  if (existingInbox) {
+    throw new ApiError("conflict", "this username is taken");
+  }
+
+  const orgId = newId("org");
+  const podId = newId("pod");
+  const now = new Date().toISOString();
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO organizations (org_id, name, plan, human_email, verified, created_at, updated_at)
+         VALUES (?, ?, 'free', ?, 0, ?, ?)`
+      ).bind(orgId, input.org_name ?? verdict.username, humanEmail, now, now),
+      c.env.DB.prepare(
+        "INSERT INTO pods (pod_id, org_id, name, created_at) VALUES (?, ?, 'default', ?)"
+      ).bind(podId, orgId, now),
+      c.env.DB.prepare(
+        `INSERT INTO inboxes (inbox_id, org_id, pod_id, username, domain, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(inboxId, orgId, podId, verdict.username, SHARED_DOMAIN, now, now)
+    ]);
+  } catch (err) {
+    if (String(err).includes("UNIQUE")) {
+      throw new ApiError("conflict", "this email or username is already registered");
+    }
+    throw err;
+  }
+
+  const delivered = await issueOtp(c.env, orgId, humanEmail, "console_login");
+  return c.json(
+    {
+      organization_id: orgId,
+      inbox_id: inboxId,
+      message: delivered
+        ? `Sign-in code sent to ${humanEmail}.`
+        : `We could not deliver the sign-in code to ${humanEmail}; try signing in again in a minute.`
+    },
+    201
+  );
+});
+
 consoleAuth.post("/console/verify", async (c) => {
   const input = await parseBody(c, VerifyInput);
   const org = await findOrg(c.env, input.email);
@@ -117,6 +180,12 @@ consoleAuth.post("/console/verify", async (c) => {
   }
   const token = `wms_${randomToken(32)}`;
   const now = Date.now();
+  // A successful OTP round-trip proves ownership of the org's human email.
+  await c.env.DB.prepare(
+    "UPDATE organizations SET verified = 1, updated_at = ? WHERE org_id = ? AND verified = 0"
+  )
+    .bind(new Date(now).toISOString(), org.org_id)
+    .run();
   await c.env.DB.prepare(
     `INSERT INTO sessions (session_id, token_hash, org_id, email, expires_at, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
