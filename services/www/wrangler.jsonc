@@ -12,15 +12,12 @@
     "staging": {
       "vars": { "WZRDMAIL_ENV": "staging" },
       "workers_dev": true,
-      "routes": [{ "pattern": "staging.wzrd.tech", "custom_domain": true }]
+      "routes": [{ "pattern": "staging.mail.wzrd.tech", "custom_domain": true }]
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod" },
       "workers_dev": true,
-      "routes": [
-        { "pattern": "wzrd.tech", "custom_domain": true },
-        { "pattern": "www.wzrd.tech", "custom_domain": true }
-      ]
+      "routes": [{ "pattern": "mail.wzrd.tech", "custom_domain": true }]
     }
   }
 }
