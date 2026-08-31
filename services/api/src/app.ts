@@ -7,6 +7,7 @@ import { consoleAuth } from "./routes/console.js";
 import { health } from "./routes/health.js";
 import { inboxes } from "./routes/inboxes.js";
 import { keys } from "./routes/keys.js";
+import { lists } from "./routes/lists.js";
 import { messages } from "./routes/messages.js";
 import { threads } from "./routes/threads.js";
 import { usage } from "./routes/usage.js";
@@ -53,6 +54,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/v0", consoleAuth);
   app.route("/v0", inboxes);
   app.route("/v0", keys);
+  app.route("/v0", lists);
   app.route("/v0", messages);
   app.route("/v0", threads);
   app.route("/v0", usage);

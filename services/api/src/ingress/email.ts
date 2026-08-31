@@ -29,6 +29,11 @@ export async function handleEmail(
     envelopeTo: message.to
   });
 
+  if (result.kind === "blocked") {
+    await env.MAIL.delete(rawKey);
+    message.setReject("550 sender address rejected by policy");
+  }
+
   console.log(
     JSON.stringify({
       msg: "email_received",

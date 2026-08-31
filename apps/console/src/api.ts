@@ -116,6 +116,15 @@ export interface Webhook {
   created_at: string;
 }
 
+export interface ListEntry {
+  entry_id: string;
+  organization_id: string;
+  inbox_id: string | null;
+  kind: "allow" | "block";
+  pattern: string;
+  created_at: string;
+}
+
 export interface ApiKey {
   key_id: string;
   name: string | null;
