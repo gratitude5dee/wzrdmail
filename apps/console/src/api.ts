@@ -123,6 +123,35 @@ export interface Draft {
   updated_at: string;
 }
 
+export interface DnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  priority?: number;
+}
+
+export interface DnsCheck {
+  type: string;
+  name: string;
+  expected: string;
+  ok: boolean;
+  found: string[];
+}
+
+export interface Domain {
+  domain_id: string;
+  organization_id: string;
+  name: string;
+  status: "pending" | "verified" | "failed";
+  verified: boolean;
+  failure_reason: string | null;
+  verified_at: string | null;
+  last_checked_at: string | null;
+  dns_records: DnsRecord[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Webhook {
   webhook_id: string;
   url: string;
