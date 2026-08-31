@@ -86,6 +86,10 @@ describe("landing page", () => {
     expect(page.headers.get("Location")).toBe(
       "https://docs.mail.wzrd.tech/quickstart"
     );
+    const withQuery = await app.request("/docs/quickstart?foo=bar", {}, env);
+    expect(withQuery.headers.get("Location")).toBe(
+      "https://docs.mail.wzrd.tech/quickstart?foo=bar"
+    );
   });
 
   it("returns the error envelope on unknown routes", async () => {
