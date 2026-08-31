@@ -72,21 +72,31 @@ describe("auth login/whoami/logout", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ api_key: "wm_alias" });
   });
 
-  it("--api-key beats env, env beats stored config", async () => {
+  it("env always beats --api-key, flag beats stored config (§10)", async () => {
     const path = tmpConfig();
     const env = { WZRDMAIL_CONFIG_PATH: path, WZRDMAIL_API_KEY: "wm_env" };
     await run(["auth", "login", "--api-key", "wm_stored"], io({ WZRDMAIL_CONFIG_PATH: path }).io);
 
     const c1: { url?: URL; auth?: string } = {};
-    await run(["inboxes", "list"], io(env, jsonFetch(c1, { inboxes: [] })).io);
+    await run(
+      ["inboxes", "list", "--api-key", "wm_flag"],
+      io(env, jsonFetch(c1, { inboxes: [] })).io
+    );
     expect(c1.auth).toBe("Bearer wm_env");
 
     const c2: { url?: URL; auth?: string } = {};
     await run(
       ["inboxes", "list", "--api-key", "wm_flag"],
-      io(env, jsonFetch(c2, { inboxes: [] })).io
+      io({ WZRDMAIL_CONFIG_PATH: path }, jsonFetch(c2, { inboxes: [] })).io
     );
     expect(c2.auth).toBe("Bearer wm_flag");
+
+    const c3: { url?: URL; auth?: string } = {};
+    await run(
+      ["inboxes", "list"],
+      io({ WZRDMAIL_CONFIG_PATH: path }, jsonFetch(c3, { inboxes: [] })).io
+    );
+    expect(c3.auth).toBe("Bearer wm_stored");
   });
 });
 
@@ -115,11 +125,87 @@ describe("events tail", () => {
     }
   }
 
-  it("builds a ws URL with the api key and honors http base URLs", () => {
+  it("builds a ws URL with the api key and honors loopback http base URLs", () => {
     expect(tailUrl(undefined, "wm_1")).toBe("wss://api.wzrd.tech/v0/ws?api_key=wm_1");
     expect(tailUrl("http://localhost:8787", "wm_1")).toBe(
       "ws://localhost:8787/v0/ws?api_key=wm_1"
     );
+    expect(tailUrl("http://127.0.0.1:8787", "wm_1")).toBe(
+      "ws://127.0.0.1:8787/v0/ws?api_key=wm_1"
+    );
+  });
+
+  it("refuses plaintext ws:// to non-loopback hosts", () => {
+    expect(() => tailUrl("http://api.example.com", "wm_1")).toThrow(/plaintext/);
+  });
+
+  it("rejects --max values below 1 as usage errors without connecting", async () => {
+    for (const max of ["0", "-3", "1.5"]) {
+      const a = io({ WZRDMAIL_API_KEY: "wm_live_test" });
+      const code = await run(["events", "tail", "--max", max], {
+        ...a.io,
+        webSocket: () => {
+          throw new Error("should not connect");
+        }
+      });
+      expect(code).toBe(EXIT_ERROR);
+      expect(a.stderr.join("\n")).toContain("--max");
+    }
+  });
+
+  it("reconnects after an unexpected close and backfills with last_event_id", async () => {
+    const sockets: FakeSocket[] = [];
+    const a = io({ WZRDMAIL_API_KEY: "wm_live_test" });
+    const promise = run(
+      ["events", "tail", "--inbox-ids", "a@wzrd.tech", "--max", "2"],
+      {
+        ...a.io,
+        webSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        sleep: () => Promise.resolve()
+      }
+    );
+    await Promise.resolve();
+    sockets[0]?.emit("open", {});
+    sockets[0]?.emit("message", { data: '{"event_id":"evt_1","type":"message.received"}' });
+    sockets[0]?.emit("close", {});
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sockets).toHaveLength(2);
+    sockets[1]?.emit("open", {});
+    expect(sockets[1]?.sent).toEqual([
+      JSON.stringify({ inbox_ids: ["a@wzrd.tech"], last_event_id: "evt_1" })
+    ]);
+    sockets[1]?.emit("message", { data: '{"event_id":"evt_2","type":"message.sent"}' });
+    expect(await promise).toBe(EXIT_OK);
+    expect(a.stdout).toEqual([
+      '{"event_id":"evt_1","type":"message.received"}',
+      '{"event_id":"evt_2","type":"message.sent"}'
+    ]);
+  });
+
+  it("gives up after maxRetries consecutive failed connections", async () => {
+    const sockets: FakeSocket[] = [];
+    const a = io({ WZRDMAIL_API_KEY: "wm_live_test" });
+    const promise = run(["events", "tail"], {
+      ...a.io,
+      webSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        queueMicrotask(() => {
+          socket.emit("close", {});
+        });
+        return socket;
+      },
+      sleep: () => Promise.resolve()
+    });
+    expect(await promise).toBe(EXIT_ERROR);
+    expect(sockets.length).toBe(6);
+    expect(a.stderr.join("\n")).toContain("retries exhausted");
   });
 
   it("subscribes with inbox filters and prints events until --max", async () => {
