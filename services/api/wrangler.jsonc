@@ -1,0 +1,73 @@
+// wzrdmail API Worker (fetch + email + queue handlers in one deployable, §6).
+// Resource ids are patched in by scripts/setup.ts — placeholders are invalid on purpose.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wzrdmail-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "WZRDMAIL_ENV": "dev",
+    "BUILD_SHA": "dev"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wzrdmail-dev",
+      "database_id": "placeholder-set-by-setup-script",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MAIL",
+      "bucket_name": "wzrdmail-mail-dev"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "placeholder-set-by-setup-script"
+    }
+  ],
+  "env": {
+    "staging": {
+      "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset" },
+      "routes": [
+        { "pattern": "staging.api.wzrd.tech", "custom_domain": true }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "wzrdmail-staging",
+          "database_id": "placeholder-set-by-setup-script",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "MAIL", "bucket_name": "wzrdmail-mail-staging" }
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "placeholder-set-by-setup-script" }
+      ]
+    },
+    "production": {
+      "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset" },
+      "routes": [{ "pattern": "api.wzrd.tech", "custom_domain": true }],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "wzrdmail-prod",
+          "database_id": "placeholder-set-by-setup-script",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "MAIL", "bucket_name": "wzrdmail-mail-prod" }
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "placeholder-set-by-setup-script" }
+      ]
+    }
+  }
+}
