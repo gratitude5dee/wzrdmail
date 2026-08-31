@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 from pydantic import BaseModel, ConfigDict
+
+
+class SendAttachment(TypedDict):
+    """Outbound attachment (core SendAttachmentInput): base64 `content`."""
+
+    filename: str
+    content_type: str
+    content: str
 
 
 class _Model(BaseModel):

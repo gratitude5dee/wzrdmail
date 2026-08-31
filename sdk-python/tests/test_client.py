@@ -124,10 +124,59 @@ def test_message_send_path_and_body() -> None:
 def test_message_list_filters() -> None:
     rec = Recorder([httpx.Response(200, json={"messages": []})])
     client = make_client(rec)
-    client.inboxes.messages.list("scout@wzrd.tech", labels=["inbox"], before="2026-01-01")
+    client.inboxes.messages.list(
+        "scout@wzrd.tech", labels=["inbox", "unread"], before="2026-01-01"
+    )
     params = rec.last.url.params
-    assert params["labels"] == "inbox"
+    assert params["labels"] == "inbox,unread"
+    assert len(params.get_list("labels")) == 1
     assert params["before"] == "2026-01-01"
+
+
+def test_message_send_headers_and_attachments() -> None:
+    rec = Recorder(
+        [httpx.Response(200, json={"message_id": "msg_1", "inbox_id": "scout@wzrd.tech"})]
+    )
+    client = make_client(rec)
+    client.inboxes.messages.send(
+        "scout@wzrd.tech",
+        to=["human@gmail.com"],
+        text="hi",
+        headers={"X-Custom": "1"},
+        attachments=[{"filename": "a.txt", "content_type": "text/plain", "content": "aGk="}],
+    )
+    body = body_of(rec.last)
+    assert body["headers"] == {"X-Custom": "1"}
+    assert body["attachments"] == [
+        {"filename": "a.txt", "content_type": "text/plain", "content": "aGk="}
+    ]
+
+
+def test_close_and_context_manager() -> None:
+    rec = Recorder([httpx.Response(200, json={"inboxes": []})])
+    with make_client(rec) as client:
+        client.inboxes.list()
+    with pytest.raises(RuntimeError):
+        client.inboxes.list()
+
+
+@pytest.mark.parametrize("header", ["inf", "-inf", "nan"])
+def test_retry_after_non_finite_uses_fallback(header: str) -> None:
+    rec = Recorder(
+        [
+            httpx.Response(
+                429,
+                json={"name": "rate_limited", "message": "slow down"},
+                headers={"Retry-After": header},
+            ),
+            httpx.Response(200, json={"inboxes": []}),
+        ]
+    )
+    client = make_client(rec)
+    sleeps: list[float] = []
+    client._http._sleep = sleeps.append  # noqa: SLF001
+    client.inboxes.list()
+    assert sleeps == [0.5]
 
 
 def test_threads_paths() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import TracebackType
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from .types import (
     InboxList,
     Message,
     MessageList,
+    SendAttachment,
     Thread,
     ThreadList,
     Webhook,
@@ -43,6 +45,8 @@ class _Messages:
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to: str | None = None,
+        headers: dict[str, str] | None = None,
+        attachments: list[SendAttachment] | None = None,
         labels: list[str] | None = None,
         client_id: str | None = None,
     ) -> Message:
@@ -58,6 +62,10 @@ class _Messages:
                     "cc": cc,
                     "bcc": bcc,
                     "reply_to": reply_to,
+                    "headers": headers,
+                    "attachments": (
+                        [dict(a) for a in attachments] if attachments is not None else None
+                    ),
                     "labels": labels,
                     "client_id": client_id,
                 }
@@ -81,7 +89,7 @@ class _Messages:
             query={
                 "limit": limit,
                 "page_token": page_token,
-                "labels": labels,
+                "labels": ",".join(labels) if labels is not None else None,
                 "before": before,
                 "after": after,
             },
@@ -269,3 +277,17 @@ class WzrdMail:
         self.webhooks = _Webhooks(http)
         self.agent = _Agent(http)
         self.domains = _Domains(http)
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> WzrdMail:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()

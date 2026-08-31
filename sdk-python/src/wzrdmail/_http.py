@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from email.utils import parsedate_to_datetime
@@ -26,6 +27,8 @@ def _parse_retry_after_ms(header: str | None) -> float | None:
     except ValueError:
         pass
     else:
+        if not math.isfinite(seconds):
+            return None
         return max(0.0, seconds * 1000)
     try:
         dt = parsedate_to_datetime(header)
@@ -46,6 +49,9 @@ class HttpClient:
         self._base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self._client = httpx.Client(transport=transport, timeout=timeout)
         self._sleep: Callable[[float], None] = time.sleep
+
+    def close(self) -> None:
+        self._client.close()
 
     def request(
         self,
