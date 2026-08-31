@@ -116,8 +116,9 @@ export async function tailEvents(options: TailOptions): Promise<void> {
           socket.close();
         }
       });
-      socket.addEventListener("close", () => {
-        if (doneClosing) {
+      socket.addEventListener("close", (event) => {
+        // 1000 = normal closure: the server finished the stream deliberately.
+        if (doneClosing || event.code === 1000) {
           resolve(true);
           return;
         }

@@ -188,6 +188,27 @@ describe("events tail", () => {
     ]);
   });
 
+  it("treats a server close with code 1000 as normal completion, no reconnect", async () => {
+    const sockets: FakeSocket[] = [];
+    const a = io({ WZRDMAIL_API_KEY: "wm_live_test" });
+    const promise = run(["events", "tail"], {
+      ...a.io,
+      webSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      sleep: () => Promise.resolve()
+    });
+    await Promise.resolve();
+    sockets[0]?.emit("open", {});
+    sockets[0]?.emit("message", { data: '{"type":"message.received"}' });
+    sockets[0]?.emit("close", { code: 1000 });
+    expect(await promise).toBe(EXIT_OK);
+    expect(sockets).toHaveLength(1);
+    expect(a.stdout).toEqual(['{"type":"message.received"}']);
+  });
+
   it("gives up after maxRetries consecutive failed connections", async () => {
     const sockets: FakeSocket[] = [];
     const a = io({ WZRDMAIL_API_KEY: "wm_live_test" });
