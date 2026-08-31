@@ -187,6 +187,26 @@ export function draftJson(row: DraftRow): Record<string, unknown> {
   };
 }
 
+export interface ListEntryRow {
+  entry_id: string;
+  org_id: string;
+  inbox_id: string | null;
+  kind: string;
+  pattern: string;
+  created_at: string;
+}
+
+export function listEntryJson(row: ListEntryRow): Record<string, unknown> {
+  return {
+    entry_id: row.entry_id,
+    organization_id: row.org_id,
+    inbox_id: row.inbox_id,
+    kind: row.kind,
+    pattern: row.pattern,
+    created_at: row.created_at
+  };
+}
+
 /** The signing secret is only included on create (`includeSecret`). */
 export function webhookJson(
   row: WebhookRow,
