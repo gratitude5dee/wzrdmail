@@ -32,7 +32,19 @@ export async function handleEmail(
   });
 
   if (result.kind === "blocked") {
-    await env.MAIL.delete(rawKey);
+    // Raw cleanup is best-effort: the policy rejection already happened, so a
+    // transient R2 failure must not convert it into an SMTP retry.
+    try {
+      await env.MAIL.delete(rawKey);
+    } catch (err) {
+      console.log(
+        JSON.stringify({
+          msg: "blocked_raw_cleanup_failed",
+          r2_key: rawKey,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      );
+    }
     message.setReject("550 sender address rejected by policy");
   }
 

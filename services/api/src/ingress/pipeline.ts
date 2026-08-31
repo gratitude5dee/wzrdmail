@@ -139,6 +139,13 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     return { kind: "unrouted" };
   }
 
+  const email = await PostalMime.parse(input.raw);
+
+  // DSN/ARF reports (often from empty or mailer-daemon envelope senders)
+  // bypass sender-list policy so bounce states and suppressions stay fresh.
+  const dsn = detectDsn(email);
+  if (dsn) return handleDsn(env, inbox, email, dsn);
+
   const senderVerdict = await evaluateSenderLists(
     env.DB,
     inbox.org_id,
@@ -161,11 +168,6 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     });
     return { kind: "blocked", reason: senderVerdict.reason };
   }
-
-  const email = await PostalMime.parse(input.raw);
-
-  const dsn = detectDsn(email);
-  if (dsn) return handleDsn(env, inbox, email, dsn);
 
   // SMTP-level retries redeliver the same MIME; the RFC Message-ID makes
   // redelivery a no-op instead of a duplicate row. Pending (uncommitted)
