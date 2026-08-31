@@ -27,11 +27,15 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
     setBusy(true);
     setError(null);
     try {
-      await api("/console/signup", {
+      const res = await api<{ delivered: boolean; message: string }>("/console/signup", {
         method: "POST",
         body: JSON.stringify({ email, username })
       });
-      setStage("code");
+      if (res.delivered) {
+        setStage("code");
+      } else {
+        setError(res.message);
+      }
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "could not create the account");
     } finally {
@@ -90,7 +94,9 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
                   placeholder="yourname"
                   required
                 />
-                <p className="dim">Your first inbox will be {username || "yourname"}@wzrd.tech</p>
+                <p className="dim">
+                  Your first inbox will be {(username || "yourname").toLowerCase()}@wzrd.tech
+                </p>
               </div>
             )}
             <button
