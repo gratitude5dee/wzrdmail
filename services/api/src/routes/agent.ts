@@ -169,6 +169,7 @@ agent.post("/agent/verify/resend", async (c) => {
   )
     .bind(auth.org_id)
     .first<{ created_at: string }>();
+  let claimedAt: string | null = null;
   if (pending) {
     const remainingMs =
       OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(pending.created_at).getTime());
@@ -178,11 +179,12 @@ agent.post("/agent/verify/resend", async (c) => {
     }
     // Claim the cooldown window atomically so concurrent resends cannot each
     // trigger a send: only the request that bumps created_at proceeds.
+    claimedAt = new Date().toISOString();
     const claimed = await c.env.DB.prepare(
       `UPDATE otp_codes SET created_at = ?
        WHERE org_id = ? AND purpose = 'agent_verify' AND created_at = ?`
     )
-      .bind(new Date().toISOString(), auth.org_id, pending.created_at)
+      .bind(claimedAt, auth.org_id, pending.created_at)
       .run();
     if (claimed.meta.changes === 0) {
       c.header("Retry-After", String(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000)));
@@ -191,6 +193,16 @@ agent.post("/agent/verify/resend", async (c) => {
   }
   const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
   if (!delivered) {
+    // Release the claim so a failed delivery does not start a cooldown; only
+    // restore if the row still carries our claim timestamp.
+    if (pending && claimedAt) {
+      await c.env.DB.prepare(
+        `UPDATE otp_codes SET created_at = ?
+         WHERE org_id = ? AND purpose = 'agent_verify' AND created_at = ?`
+      )
+        .bind(pending.created_at, auth.org_id, claimedAt)
+        .run();
+    }
     throw new ApiError("internal_error", "could not deliver the verification code; try again later");
   }
   return c.json({ organization_id: auth.org_id, message: `Verification code sent to ${auth.human_email}.` });

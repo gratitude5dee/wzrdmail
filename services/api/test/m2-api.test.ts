@@ -220,6 +220,15 @@ describe("agent onboarding (§M2)", () => {
     );
     expect(failed.status).toBe(500);
 
+    // A failed delivery must not start a cooldown: retrying immediately is
+    // allowed (and fails on delivery again, not on rate limiting).
+    const retry = await app.request(
+      "/v0/agent/verify/resend",
+      authed(body.api_key, { method: "POST" }),
+      env
+    );
+    expect(retry.status).toBe(500);
+
     const ok = await app.request(
       "/v0/agent/verify",
       authed(body.api_key, { method: "POST", body: JSON.stringify({ otp_code: "111222" }) }),
