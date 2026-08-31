@@ -1,4 +1,5 @@
 import { newId, type EventType } from "@wzrdmail/core";
+import { deliveryEnqueueStatements } from "./webhook-delivery.js";
 
 export interface EmitEventInput {
   type: EventType;
@@ -42,17 +43,26 @@ export function buildEvent(input: EmitEventInput): BuiltEvent {
 }
 
 /**
- * Write one immutable event row (§8.1). Queue fanout to webhooks/WS is M3;
- * until then the events table is the delivery log consumers poll.
+ * Write one immutable event row (§8.1) and enqueue one pending
+ * webhook_deliveries row per subscribed webhook, atomically. The HTTP
+ * attempts happen out of band (processDueDeliveries via waitUntil / the
+ * scheduled sweep), so an event is never dropped: its delivery rows are
+ * durable first.
  */
 export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<string> {
   const built = buildEvent(input);
-  await db
+  const eventInsert = db
     .prepare(
       "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
-    .bind(...built.values)
-    .run();
+    .bind(...built.values);
+  const deliveryInserts = await deliveryEnqueueStatements(db, {
+    event_id: built.event_id,
+    type: input.type,
+    org_id: input.org_id,
+    inbox_id: input.inbox_id
+  });
+  await db.batch([eventInsert, ...deliveryInserts]);
   return built.event_id;
 }
 

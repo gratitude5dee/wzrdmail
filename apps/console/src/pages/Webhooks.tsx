@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiRequestError, api, apiAll, type Webhook } from "../api";
+import { ApiRequestError, api, apiAll, type Webhook, type WebhookDelivery } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const EVENT_CATALOG: { type: string; description: string }[] = [
@@ -24,6 +24,7 @@ export function WebhooksPage() {
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [logHook, setLogHook] = useState<Webhook | null>(null);
 
   const load = useCallback(async () => {
     setHooks(await apiAll<Webhook>("/webhooks?limit=100", "webhooks"));
@@ -129,6 +130,9 @@ export function WebhooksPage() {
                       </span>
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
+                      <button className="btn sm" onClick={() => setLogHook(hook)}>
+                        Deliveries
+                      </button>{" "}
                       <button className="btn sm" onClick={() => void toggle(hook)}>
                         {hook.enabled ? "Disable" : "Enable"}
                       </button>{" "}
@@ -229,6 +233,8 @@ export function WebhooksPage() {
         </div>
       )}
 
+      {logHook && <DeliveryLogModal hook={logHook} onClose={() => setLogHook(null)} />}
+
       {showApi && (
         <UseApiDrawer
           onClose={() => setShowApi(false)}
@@ -243,6 +249,140 @@ export function WebhooksPage() {
           ]}
         />
       )}
+    </div>
+  );
+}
+
+const STATUS_FILTERS = ["all", "pending", "success", "failed"] as const;
+
+function DeliveryLogModal({ hook, onClose }: { hook: Webhook; onClose: () => void }) {
+  const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
+  const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("all");
+  const [loading, setLoading] = useState(true);
+  const [redelivering, setRedelivering] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const query = statusFilter === "all" ? "" : `&status=${statusFilter}`;
+      setDeliveries(
+        await apiAll<WebhookDelivery>(
+          `/webhooks/${hook.webhook_id}/deliveries?limit=100${query}`,
+          "deliveries"
+        )
+      );
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not load deliveries");
+    } finally {
+      setLoading(false);
+    }
+  }, [hook.webhook_id, statusFilter]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const redeliver = async (delivery: WebhookDelivery) => {
+    setRedelivering(delivery.delivery_id);
+    setError(null);
+    try {
+      await api(
+        `/webhooks/${hook.webhook_id}/deliveries/${delivery.delivery_id}/redeliver`,
+        { method: "POST" }
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "redelivery failed");
+    } finally {
+      setRedelivering(null);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        style={{ width: "min(860px, 94vw)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2>Deliveries</h2>
+        <p className="dim mono">{hook.url}</p>
+        <div className="tabs">
+          {STATUS_FILTERS.map((s) => (
+            <button
+              key={s}
+              className={s === statusFilter ? "active" : ""}
+              onClick={() => setStatusFilter(s)}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        {error && <p className="error">{error}</p>}
+        {loading ? (
+          <p className="dim">Loading…</p>
+        ) : deliveries.length === 0 ? (
+          <p className="dim">No deliveries yet.</p>
+        ) : (
+          <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Event</th>
+                  <th>Response</th>
+                  <th>Attempt</th>
+                  <th>Time</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {deliveries.map((d) => (
+                  <tr key={d.delivery_id}>
+                    <td>
+                      <span
+                        className={`chip ${
+                          d.status === "success" ? "green" : d.status === "failed" ? "red" : ""
+                        }`}
+                      >
+                        {d.status}
+                      </span>
+                    </td>
+                    <td className="mono">{d.event_type}</td>
+                    <td className="dim">
+                      {d.response_status ?? (d.error ? d.error : "—")}
+                    </td>
+                    <td className="dim">
+                      {d.attempt}
+                      {d.manual ? " (manual)" : ""}
+                    </td>
+                    <td className="dim">{new Date(d.created_at).toLocaleString()}</td>
+                    <td>
+                      <button
+                        className="btn sm"
+                        disabled={redelivering !== null || d.status === "pending"}
+                        onClick={() => void redeliver(d)}
+                      >
+                        {redelivering === d.delivery_id ? "Sending…" : "Redeliver"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="foot">
+          <button className="btn" onClick={() => void load()}>
+            Refresh
+          </button>
+          <button className="btn primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

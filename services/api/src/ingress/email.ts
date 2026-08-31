@@ -1,5 +1,6 @@
 import { PLATFORM_LIMITS } from "@wzrdmail/core";
 import type { Env } from "../env.js";
+import { processDueDeliveries } from "../lib/webhook-delivery.js";
 import { ingestEmail } from "./pipeline.js";
 
 /**
@@ -9,7 +10,8 @@ import { ingestEmail } from "./pipeline.js";
  */
 export async function handleEmail(
   message: ForwardableEmailMessage,
-  env: Env
+  env: Env,
+  ctx: ExecutionContext
 ): Promise<void> {
   if (message.rawSize > PLATFORM_LIMITS.maxInboundStoredBytes) {
     message.setReject("552 message exceeds size limit");
@@ -33,6 +35,8 @@ export async function handleEmail(
     await env.MAIL.delete(rawKey);
     message.setReject("550 sender address rejected by policy");
   }
+
+  ctx.waitUntil(processDueDeliveries(env));
 
   console.log(
     JSON.stringify({

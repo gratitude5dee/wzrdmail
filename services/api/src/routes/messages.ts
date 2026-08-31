@@ -20,6 +20,7 @@ import {
   requireInbox,
   type InboxRow
 } from "../lib/http.js";
+import { processDueDeliveries } from "../lib/webhook-delivery.js";
 import {
   applyLabelPatch,
   messageJson,
@@ -319,7 +320,18 @@ async function sendFromInbox(
   };
   const provider = new CloudflareEmailProvider(c.env);
   const result = await sendMessage(c.env, provider, ctx, input);
+  deliverInBackground(c);
   return c.json(result, 200);
+}
+
+/** Kick pending webhook deliveries after the response; tests have no
+ * ExecutionContext, so fall back to letting the sweep pick them up. */
+function deliverInBackground(c: Context<{ Bindings: Env }>): void {
+  try {
+    c.executionCtx.waitUntil(processDueDeliveries(c.env));
+  } catch {
+    // no ExecutionContext (unit tests): the scheduled sweep delivers instead
+  }
 }
 
 messages.post("/inboxes/:inbox_id/messages/send", async (c) => {

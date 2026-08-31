@@ -10,6 +10,7 @@
     "WZRDMAIL_ENV": "dev",
     "BUILD_SHA": "dev"
   },
+  // Scheduled-send sweep + trash purge + webhook retry sweep + delivery-log retention.
   "triggers": {
     "crons": ["* * * * *"]
   },
