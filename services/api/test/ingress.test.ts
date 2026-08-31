@@ -116,6 +116,46 @@ describe("inbound pipeline (§6.1)", () => {
     expect(thread?.message_count).toBe(1);
   });
 
+  it("defers redelivery while another invocation holds a fresh claim", async () => {
+    const inbox = await seedInbox();
+    await env.DB.prepare(
+      `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id, committed, claimed_at)
+       VALUES (?, '<orig-1@example.com>', 'thread_pending', 'msg_pending', 0, ?)`
+    )
+      .bind(inbox.inbox_id, new Date().toISOString())
+      .run();
+    await expect(ingest("simple.eml")).rejects.toMatchObject({ name: "IngestInFlightError" });
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE rfc822_message_id = '<orig-1@example.com>'"
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it("reclaims an abandoned pending claim and stores the message", async () => {
+    const inbox = await seedInbox();
+    const staleAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    await env.DB.prepare(
+      `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id, committed, claimed_at)
+       VALUES (?, '<orig-1@example.com>', 'thread_dead', 'msg_dead', 0, ?)`
+    )
+      .bind(inbox.inbox_id, staleAt)
+      .run();
+    const result = await ingest("simple.eml");
+    expect(result.kind).toBe("stored");
+    if (result.kind !== "stored") return;
+    const lookup = await env.DB.prepare(
+      "SELECT msg_id, committed FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = '<orig-1@example.com>'"
+    )
+      .bind(inbox.inbox_id)
+      .first<{ msg_id: string; committed: number }>();
+    expect(lookup?.msg_id).toBe(result.msg_id);
+    expect(lookup?.committed).toBe(1);
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE rfc822_message_id = '<orig-1@example.com>'"
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
   it("does not merge unrelated senders' threads that share a subject", async () => {
     await seedInbox();
     const first = await ingestEmail(env, {

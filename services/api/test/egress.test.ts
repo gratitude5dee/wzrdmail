@@ -199,6 +199,76 @@ describe("outbound pipeline (§6.2)", () => {
     expect(provider.sent).toHaveLength(1);
   });
 
+  it("rejects a concurrent request while a fresh reservation is in flight", async () => {
+    const inbox = await seedInbox();
+    const provider = new StubProvider();
+    await env.DB.prepare(
+      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at, owner)
+       VALUES (?, 'message', 'cli-busy', '', ?, 'other-invocation')`
+    )
+      .bind(inbox.org_id, new Date().toISOString())
+      .run();
+    await expect(
+      sendMessage(env, provider, ctxFor(inbox), {
+        to: ["dest@example.com"],
+        cc: [],
+        bcc: [],
+        subject: "x",
+        text: "y",
+        client_id: "cli-busy",
+        labels: []
+      })
+    ).rejects.toMatchObject({ name: "conflict" });
+    expect(provider.sent).toHaveLength(0);
+  });
+
+  it("takes over a stale reservation and locks out the previous owner", async () => {
+    const inbox = await seedInbox();
+    const provider = new StubProvider();
+    const staleAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    await env.DB.prepare(
+      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at, owner)
+       VALUES (?, 'message', 'cli-stale', '', ?, 'dead-invocation')`
+    )
+      .bind(inbox.org_id, staleAt)
+      .run();
+    const result = await sendMessage(env, provider, ctxFor(inbox), {
+      to: ["dest@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "resumed",
+      text: "resumed send",
+      client_id: "cli-stale",
+      labels: []
+    });
+    expect(result.state).toBe("sent");
+    expect(provider.sent).toHaveLength(1);
+
+    // The previous owner's token no longer matches: an expired claimant that
+    // resumes cannot renew its lease, reach the provider, or commit a result.
+    const staleRenew = await env.DB.prepare(
+      `UPDATE idempotency_keys SET created_at = ?
+       WHERE org_id = ? AND resource_type = 'message' AND client_id = 'cli-stale'
+         AND response = '' AND owner = 'dead-invocation'`
+    )
+      .bind(new Date().toISOString(), inbox.org_id)
+      .run();
+    expect(staleRenew.meta.changes).toBe(0);
+
+    // The takeover's response is durable: a later retry replays it.
+    const replay = await sendMessage(env, provider, ctxFor(inbox), {
+      to: ["dest@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "resumed",
+      text: "resumed send",
+      client_id: "cli-stale",
+      labels: []
+    });
+    expect(replay.message_id).toBe(result.message_id);
+    expect(provider.sent).toHaveLength(1);
+  });
+
   it("keeps a partially delivered message sent and reports rejected recipients", async () => {
     const inbox = await seedInbox();
     const provider = new StubProvider();
