@@ -33,7 +33,7 @@ export async function thirdwebInitiate(env: Env, email: string): Promise<boolean
     });
     if (!res.ok) {
       console.error(
-        JSON.stringify({ msg: "thirdweb_initiate_failed", status: res.status, body: await res.text() })
+        JSON.stringify({ msg: "thirdweb_initiate_failed", status: res.status })
       );
     }
     return res.ok;
@@ -43,19 +43,66 @@ export async function thirdwebInitiate(env: Env, email: string): Promise<boolean
   }
 }
 
-/** Verify an emailed code with thirdweb. */
-export async function thirdwebComplete(env: Env, email: string, code: string): Promise<boolean> {
-  if (!env.THIRDWEB_CLIENT_ID) return false;
+/**
+ * Verify an emailed code with thirdweb. Distinguishes a definitive rejection
+ * ("invalid") from transient upstream failures ("unavailable"), so callers
+ * only consume an attempt for genuine wrong guesses.
+ */
+export async function thirdwebComplete(
+  env: Env,
+  email: string,
+  code: string
+): Promise<"ok" | "invalid" | "unavailable"> {
+  if (!env.THIRDWEB_CLIENT_ID) return "unavailable";
   try {
     const res = await fetch(`${THIRDWEB_API}/v1/auth/complete`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-client-id": env.THIRDWEB_CLIENT_ID },
       body: JSON.stringify({ method: "email", email, code })
     });
-    return res.ok;
+    if (res.ok) return "ok";
+    if (res.status === 429 || res.status >= 500) {
+      console.error(JSON.stringify({ msg: "thirdweb_complete_unavailable", status: res.status }));
+      return "unavailable";
+    }
+    return "invalid";
   } catch (err) {
     console.error(JSON.stringify({ msg: "thirdweb_complete_failed", error: String(err) }));
-    return false;
+    return "unavailable";
+  }
+}
+
+/**
+ * Resolve a thirdweb user auth token (JWT) to the verified email it belongs
+ * to, via thirdweb's authenticated wallet endpoint. "invalid" means thirdweb
+ * definitively rejected the token; "unavailable" means the check could not be
+ * performed.
+ */
+export async function thirdwebEmailForToken(
+  env: Env,
+  token: string
+): Promise<{ email: string } | "invalid" | "unavailable"> {
+  if (!env.THIRDWEB_CLIENT_ID) return "unavailable";
+  try {
+    const res = await fetch(`${THIRDWEB_API}/v1/wallets/me`, {
+      headers: { "x-client-id": env.THIRDWEB_CLIENT_ID, authorization: `Bearer ${token}` }
+    });
+    if (res.status === 429 || res.status >= 500) {
+      console.error(JSON.stringify({ msg: "thirdweb_me_unavailable", status: res.status }));
+      return "unavailable";
+    }
+    if (!res.ok) return "invalid";
+    const body = (await res.json()) as {
+      result?: { profiles?: { type?: string; email?: string; emailVerified?: boolean }[] };
+    };
+    const profile = body.result?.profiles?.find(
+      (p) => typeof p.email === "string" && p.email.length > 0 && p.emailVerified !== false
+    );
+    if (!profile?.email) return "invalid";
+    return { email: profile.email.toLowerCase() };
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "thirdweb_me_failed", error: String(err) }));
+    return "unavailable";
   }
 }
 
@@ -164,7 +211,7 @@ export async function checkOtp(
   purpose: OtpPurpose,
   submitted: string,
   email: string
-): Promise<"ok" | "expired" | "exhausted" | "mismatch" | "missing"> {
+): Promise<"ok" | "expired" | "exhausted" | "mismatch" | "missing" | "unavailable"> {
   const row = await env.DB.prepare(
     "SELECT code_hash, expires_at FROM otp_codes WHERE org_id = ? AND purpose = ?"
   )
@@ -182,7 +229,17 @@ export async function checkOtp(
     .run();
   if (consumed.meta.changes === 0) return "exhausted";
   if (row.code_hash === THIRDWEB_CODE) {
-    if (!(await thirdwebComplete(env, email.toLowerCase(), submitted))) return "mismatch";
+    const verdict = await thirdwebComplete(env, email.toLowerCase(), submitted);
+    if (verdict === "unavailable") {
+      // Refund the attempt: the guess was never actually checked.
+      await env.DB.prepare(
+        "UPDATE otp_codes SET attempts = attempts - 1 WHERE org_id = ? AND purpose = ? AND attempts > 0"
+      )
+        .bind(orgId, purpose)
+        .run();
+      return "unavailable";
+    }
+    if (verdict === "invalid") return "mismatch";
   } else if (row.code_hash !== (await hashApiKey(submitted))) {
     return "mismatch";
   }

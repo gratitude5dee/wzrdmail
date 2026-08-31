@@ -13,7 +13,8 @@ import {
   checkOtp,
   deliverOtp,
   issueOtp,
-  thirdwebComplete
+  thirdwebComplete,
+  thirdwebEmailForToken
 } from "../lib/otp.js";
 
 export const consoleAuth = new Hono<{ Bindings: Env }>();
@@ -27,6 +28,11 @@ const SignupInput = z.object({
   org_name: z.string().min(1).max(120).optional()
 });
 const VerifyInput = z.object({ email: z.string().email(), otp_code: z.string().min(4).max(8) });
+const ThirdwebInput = z.object({
+  token: z.string().min(16).max(4096),
+  username: z.string().min(1).max(64).optional(),
+  org_name: z.string().min(1).max(120).optional()
+});
 
 function randomToken(bytes: number): string {
   const buf = new Uint8Array(bytes);
@@ -136,11 +142,18 @@ const SIGNUP_IP_LIMIT = 10;
 const SIGNUP_IP_WINDOW_SECONDS = 3600;
 
 /** Best-effort per-IP throttle: anonymous signups may not spam email sends. */
-async function throttleSignup(c: { env: Env; req: { header: (n: string) => string | undefined } }): Promise<void> {
+async function throttleSignup(c: {
+  env: Env;
+  req: { header: (n: string) => string | undefined };
+  header: (name: string, value: string) => void;
+}): Promise<void> {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   const key = `signup_rate:${ip}`;
   const count = Number((await c.env.CACHE.get(key)) ?? "0");
   if (count >= SIGNUP_IP_LIMIT) {
+    // The counter's TTL resets on each write, so the full window is the
+    // conservative upper bound on when a retry is allowed.
+    c.header("Retry-After", String(SIGNUP_IP_WINDOW_SECONDS));
     throw new ApiError("rate_limited", "too many sign-up attempts; try again later");
   }
   await c.env.CACHE.put(key, String(count + 1), { expirationTtl: SIGNUP_IP_WINDOW_SECONDS });
@@ -239,7 +252,7 @@ async function checkPendingSignup(
   humanEmail: string,
   pending: PendingSignup,
   submitted: string
-): Promise<"ok" | "exhausted" | "mismatch" | "expired"> {
+): Promise<"ok" | "exhausted" | "mismatch" | "expired" | "unavailable"> {
   if (new Date(pending.expires_at).getTime() < Date.now()) return "expired";
   if (pending.attempts >= OTP_MAX_ATTEMPTS) return "exhausted";
   // KV writes are not atomic, so this attempt counter is best-effort; the
@@ -248,11 +261,19 @@ async function checkPendingSignup(
   await env.CACHE.put(pendingKey(humanEmail), JSON.stringify(pending), {
     expirationTtl: Math.max(60, Math.ceil((new Date(pending.expires_at).getTime() - Date.now()) / 1000))
   });
-  const matches =
-    pending.code_hash === THIRDWEB_CODE
-      ? await thirdwebComplete(env, humanEmail, submitted)
-      : pending.code_hash === (await hashApiKey(submitted));
-  return matches ? "ok" : "mismatch";
+  if (pending.code_hash === THIRDWEB_CODE) {
+    const result = await thirdwebComplete(env, humanEmail, submitted);
+    if (result === "unavailable") {
+      // Refund the attempt: the guess was never actually checked.
+      pending.attempts -= 1;
+      await env.CACHE.put(pendingKey(humanEmail), JSON.stringify(pending), {
+        expirationTtl: Math.max(60, Math.ceil((new Date(pending.expires_at).getTime() - Date.now()) / 1000))
+      });
+      return "unavailable";
+    }
+    return result === "ok" ? "ok" : "mismatch";
+  }
+  return pending.code_hash === (await hashApiKey(submitted)) ? "ok" : "mismatch";
 }
 
 consoleAuth.post("/console/verify", async (c) => {
@@ -264,6 +285,9 @@ consoleAuth.post("/console/verify", async (c) => {
     if (verdict !== "ok") {
       if (verdict === "exhausted") {
         throw new ApiError("forbidden", "too many attempts; request a new code");
+      }
+      if (verdict === "unavailable") {
+        throw new ApiError("internal_error", "code verification is temporarily unavailable; try again");
       }
       throw new ApiError("unauthorized", "incorrect email or code");
     }
@@ -281,11 +305,23 @@ consoleAuth.post("/console/verify", async (c) => {
       if (verdict === "exhausted") {
         throw new ApiError("forbidden", "too many attempts; request a new code");
       }
+      if (verdict === "unavailable") {
+        throw new ApiError("internal_error", "code verification is temporarily unavailable; try again");
+      }
       throw new ApiError("unauthorized", "incorrect email or code");
     }
     org = await completeSignup(c.env, humanEmail, pending);
     await c.env.CACHE.delete(pendingKey(humanEmail));
   }
+  await mintSession(c, org);
+  return c.json({ organization_id: org.org_id, email: org.human_email });
+});
+
+/** Persist a fresh console session and set its cookie. */
+async function mintSession(
+  c: { env: Env; header: (name: string, value: string) => void },
+  org: { org_id: string; human_email: string }
+): Promise<void> {
   const token = `wms_${randomToken(32)}`;
   const now = Date.now();
   await c.env.DB.prepare(
@@ -302,7 +338,60 @@ consoleAuth.post("/console/verify", async (c) => {
     )
     .run();
   c.header("Set-Cookie", sessionCookie(c.env, token, SESSION_TTL_MS / 1000));
-  return c.json({ organization_id: org.org_id, email: org.human_email });
+}
+
+// Exchange a thirdweb user auth token (from the console's embedded thirdweb
+// widget — email OTP, Google, etc.) for a wzrdmail session. The email is
+// resolved server-side from the token, never trusted from the client. New
+// emails need a username to create their organization; the first call
+// without one reports registered: false so the client can ask for it.
+consoleAuth.post("/console/thirdweb", async (c) => {
+  const input = await parseBody(c, ThirdwebInput);
+  const resolved = await thirdwebEmailForToken(c.env, input.token);
+  if (resolved === "unavailable") {
+    throw new ApiError("internal_error", "sign-in verification is temporarily unavailable; try again");
+  }
+  if (resolved === "invalid") {
+    throw new ApiError("unauthorized", "sign-in could not be verified");
+  }
+  const humanEmail = resolved.email;
+  let org = await findOrg(c.env, humanEmail);
+  if (org) {
+    // The token proves ownership of the org's human email.
+    await c.env.DB.prepare(
+      "UPDATE organizations SET verified = 1, updated_at = ? WHERE org_id = ? AND verified = 0"
+    )
+      .bind(new Date().toISOString(), org.org_id)
+      .run();
+  } else {
+    if (!input.username) {
+      return c.json({ registered: false, email: humanEmail });
+    }
+    const verdict = validateUsername(input.username);
+    if (!verdict.ok) {
+      throw new ApiError("validation_error", `username is ${verdict.reason}`);
+    }
+    const existingInbox = await c.env.DB.prepare(
+      "SELECT inbox_id FROM inboxes WHERE username = ? AND domain = ?"
+    )
+      .bind(verdict.username, SHARED_DOMAIN)
+      .first<{ inbox_id: string }>();
+    if (existingInbox) {
+      throw new ApiError("conflict", "this username is taken");
+    }
+    await throttleSignup(c);
+    const now = new Date().toISOString();
+    org = await completeSignup(c.env, humanEmail, {
+      username: verdict.username,
+      org_name: input.org_name ?? null,
+      code_hash: THIRDWEB_CODE,
+      attempts: 0,
+      expires_at: now,
+      created_at: now
+    });
+  }
+  await mintSession(c, org);
+  return c.json({ registered: true, organization_id: org.org_id, email: org.human_email });
 });
 
 consoleAuth.get("/console/session", async (c) => {

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { hashApiKey } from "../src/auth.js";
 import { NOW, seedInbox } from "./helpers.js";
@@ -116,6 +116,183 @@ describe("console auth", () => {
     expect(out.status).toBe(200);
     const after = await app.request("/v0/console/session", { headers: { cookie: token } }, env);
     expect(after.status).toBe(401);
+  });
+});
+
+const twEnv = new Proxy(env, {
+  get: (target, prop) =>
+    prop === "THIRDWEB_CLIENT_ID" ? "test-client" : Reflect.get(target, prop)
+});
+
+function stubThirdwebMe(status: number, email?: string): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      email
+        ? Response.json(
+            { result: { profiles: [{ type: "google", email, emailVerified: true }] } },
+            { status }
+          )
+        : new Response("{}", { status })
+    )
+  );
+}
+
+async function postThirdweb(body: Record<string, string>): Promise<Response> {
+  return app.request(
+    "/v0/console/thirdweb",
+    {
+      method: "POST",
+      body: JSON.stringify({ token: "tw_token_0123456789abcdef", ...body }),
+      headers: { "content-type": "application/json" }
+    },
+    twEnv
+  );
+}
+
+describe("console thirdweb exchange", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("signs in an existing org and marks it verified", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare(
+      "SELECT human_email FROM organizations WHERE org_id = ?"
+    )
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    stubThirdwebMe(200, org?.human_email);
+    const res = await postThirdweb({});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { registered: boolean; organization_id: string };
+    expect(body.registered).toBe(true);
+    expect(body.organization_id).toBe(seeded.org_id);
+    expect(res.headers.get("set-cookie")).toContain("wm_session=");
+    const row = await env.DB.prepare("SELECT verified FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ verified: number }>();
+    expect(row?.verified).toBe(1);
+  });
+
+  it("asks for a username when the email is new", async () => {
+    stubThirdwebMe(200, "newcomer@example.com");
+    const res = await postThirdweb({});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { registered: boolean; email: string };
+    expect(body.registered).toBe(false);
+    expect(body.email).toBe("newcomer@example.com");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    const org = await env.DB.prepare(
+      "SELECT org_id FROM organizations WHERE human_email = 'newcomer@example.com'"
+    ).first();
+    expect(org).toBeNull();
+  });
+
+  it("creates the org, pod, and inbox when a username is supplied", async () => {
+    stubThirdwebMe(200, "maker@example.com");
+    const res = await postThirdweb({ username: "MakerBot" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { registered: boolean; organization_id: string };
+    expect(body.registered).toBe(true);
+    expect(res.headers.get("set-cookie")).toContain("wm_session=");
+    const inbox = await env.DB.prepare(
+      "SELECT inbox_id, org_id FROM inboxes WHERE username = 'makerbot' AND domain = 'wzrd.tech'"
+    ).first<{ inbox_id: string; org_id: string }>();
+    expect(inbox?.org_id).toBe(body.organization_id);
+    const org = await env.DB.prepare("SELECT verified FROM organizations WHERE org_id = ?")
+      .bind(body.organization_id)
+      .first<{ verified: number }>();
+    expect(org?.verified).toBe(1);
+  });
+
+  it("rejects a taken username", async () => {
+    const seeded = await seedInbox();
+    const inbox = await env.DB.prepare("SELECT username FROM inboxes WHERE inbox_id = ?")
+      .bind(seeded.inbox_id)
+      .first<{ username: string }>();
+    stubThirdwebMe(200, "another@example.com");
+    const res = await postThirdweb({ username: inbox?.username ?? "" });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects an invalid token", async () => {
+    stubThirdwebMe(401);
+    const res = await postThirdweb({});
+    expect(res.status).toBe(401);
+  });
+
+  it("returns a retryable error when thirdweb is unavailable", async () => {
+    stubThirdwebMe(503);
+    const res = await postThirdweb({});
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { name: string };
+    expect(body.name).toBe("internal_error");
+  });
+});
+
+describe("thirdweb otp availability", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function seedThirdwebOtp(orgId: string): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
+       VALUES (?, 'console_login', 'thirdweb', 0, ?, ?)`
+    )
+      .bind(orgId, new Date(Date.now() + 600_000).toISOString(), NOW)
+      .run();
+  }
+
+  it("a transient thirdweb failure does not consume an attempt", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare("SELECT human_email FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    await seedThirdwebOtp(seeded.org_id);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    const res = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email: org?.human_email, otp_code: "123456" }),
+        headers: { "content-type": "application/json" }
+      },
+      twEnv
+    );
+    expect(res.status).toBe(500);
+    const row = await env.DB.prepare(
+      "SELECT attempts FROM otp_codes WHERE org_id = ? AND purpose = 'console_login'"
+    )
+      .bind(seeded.org_id)
+      .first<{ attempts: number }>();
+    expect(row?.attempts).toBe(0);
+  });
+
+  it("a definitive thirdweb rejection consumes an attempt", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare("SELECT human_email FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    await seedThirdwebOtp(seeded.org_id);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    const res = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email: org?.human_email, otp_code: "999999" }),
+        headers: { "content-type": "application/json" }
+      },
+      twEnv
+    );
+    expect(res.status).toBe(401);
+    const row = await env.DB.prepare(
+      "SELECT attempts FROM otp_codes WHERE org_id = ? AND purpose = 'console_login'"
+    )
+      .bind(seeded.org_id)
+      .first<{ attempts: number }>();
+    expect(row?.attempts).toBe(1);
   });
 });
 
