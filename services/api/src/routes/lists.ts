@@ -145,9 +145,14 @@ async function deleteEntry(
 ): Promise<Response> {
   const row = await requireEntry(c, auth, entryId, inboxId);
   if (row.inbox_id === null) requireOrgScopeForOrgWide(auth);
-  await c.env.DB.prepare("DELETE FROM list_entries WHERE entry_id = ? AND org_id = ?")
+  const deleted = await c.env.DB.prepare(
+    "DELETE FROM list_entries WHERE entry_id = ? AND org_id = ?"
+  )
     .bind(row.entry_id, auth.org_id)
     .run();
+  if (deleted.meta.changes === 0) {
+    throw new ApiError("not_found", "no such list entry");
+  }
   return c.body(null, 204);
 }
 
