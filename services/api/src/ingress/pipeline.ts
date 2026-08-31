@@ -354,7 +354,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     statements.push(
       env.DB.prepare(
         `UPDATE threads SET message_count = message_count + 1, last_message_at = ?,
-           preview = ?, updated_at = ?,
+           preview = ?, updated_at = ?, deleted_at = NULL,
            participants = (SELECT json_group_array(DISTINCT value) FROM (
              SELECT value FROM json_each(participants)
              UNION SELECT value FROM json_each(?))),

@@ -60,13 +60,23 @@ export async function deliverDueScheduled(
   let dispatched = 0;
   for (const row of due) {
     const claimed = await env.DB.prepare(
-      "UPDATE messages SET state = 'queued', updated_at = ? WHERE msg_id = ? AND state = 'scheduled'"
+      "UPDATE messages SET state = 'queued', updated_at = ? WHERE msg_id = ? AND state = 'scheduled' AND deleted_at IS NULL"
     )
       .bind(new Date().toISOString(), row.msg_id)
       .run();
     if (claimed.meta.changes === 0) continue;
-    await dispatchOne(env, provider, row);
-    dispatched++;
+    // Isolate failures per message so one bad row cannot abort the batch.
+    // dispatchOne reverts the claim itself when it fails before the provider
+    // is contacted; a failure after the provider outcome is only logged and
+    // never retried, since retrying could deliver the mail twice.
+    try {
+      await dispatchOne(env, provider, row);
+      dispatched++;
+    } catch (err) {
+      console.error(
+        JSON.stringify({ msg: "scheduled_dispatch_failed", msg_id: row.msg_id, error: String(err) })
+      );
+    }
   }
   return dispatched;
 }
@@ -81,41 +91,53 @@ async function dispatchOne(env: Env, provider: MailProvider, row: ScheduledRow):
   let providerError: string | null = null;
   let rejectedRecipients: { address: string; error: string }[] = [];
 
-  // Re-check suppressions at dispatch time: a bounce may have landed between
-  // scheduling and delivery.
-  const suppressed =
-    recipients.length === 0
-      ? null
-      : await env.DB.prepare(
-          `SELECT address FROM suppressions
-           WHERE (org_id = ? OR org_id IS NULL)
-             AND address IN (${recipients.map(() => "?").join(",")})`
-        )
-          .bind(row.org_id, ...recipients)
-          .first<{ address: string }>();
+  try {
+    // Re-check suppressions at dispatch time: a bounce may have landed between
+    // scheduling and delivery.
+    const suppressed =
+      recipients.length === 0
+        ? null
+        : await env.DB.prepare(
+            `SELECT address FROM suppressions
+             WHERE (org_id = ? OR org_id IS NULL)
+               AND address IN (${recipients.map(() => "?").join(",")})`
+          )
+            .bind(row.org_id, ...recipients)
+            .first<{ address: string }>();
 
-  if (suppressed) {
-    providerError = `recipient ${suppressed.address} is suppressed (previous bounce or complaint)`;
-  } else {
-    const raw = row.raw_key ? await env.MAIL.get(row.raw_key) : null;
-    if (!raw) {
-      providerError = "raw MIME for scheduled message is missing";
+    if (suppressed) {
+      providerError = `recipient ${suppressed.address} is suppressed (previous bounce or complaint)`;
     } else {
-      try {
-        const outcome = await provider.send({
-          from: row.from_addr,
-          to: recipients,
-          raw: await raw.text()
-        });
-        rejectedRecipients = outcome.rejected;
-        state = outcome.accepted.length > 0 ? "sent" : "rejected";
-        if (state === "rejected" && outcome.rejected.length > 0) {
-          providerError = outcome.rejected.map((r) => `${r.address}: ${r.error}`).join("; ");
+      const raw = row.raw_key ? await env.MAIL.get(row.raw_key) : null;
+      if (!raw) {
+        providerError = "raw MIME for scheduled message is missing";
+      } else {
+        const rawText = await raw.text();
+        try {
+          const outcome = await provider.send({
+            from: row.from_addr,
+            to: recipients,
+            raw: rawText
+          });
+          rejectedRecipients = outcome.rejected;
+          state = outcome.accepted.length > 0 ? "sent" : "rejected";
+          if (state === "rejected" && outcome.rejected.length > 0) {
+            providerError = outcome.rejected.map((r) => `${r.address}: ${r.error}`).join("; ");
+          }
+        } catch (err) {
+          providerError = String(err);
         }
-      } catch (err) {
-        providerError = String(err);
       }
     }
+  } catch (err) {
+    // Failed before the provider was contacted: release the claim so a later
+    // sweep retries delivery.
+    await env.DB.prepare(
+      "UPDATE messages SET state = 'scheduled', updated_at = ? WHERE msg_id = ? AND state = 'queued'"
+    )
+      .bind(new Date().toISOString(), row.msg_id)
+      .run();
+    throw err;
   }
 
   const now = new Date().toISOString();
@@ -162,6 +184,29 @@ async function dispatchOne(env: Env, provider: MailProvider, row: ScheduledRow):
 /** Permanently remove messages and threads trashed more than 30 days ago. */
 export async function purgeExpiredTrash(env: Env, now: Date = new Date()): Promise<void> {
   const cutoff = new Date(now.getTime() - TRASH_RETENTION_MS).toISOString();
+  // Delete R2 objects before the metadata rows: if an object delete fails, the
+  // rows survive so the next sweep can find and retry the object.
+  const expired = (
+    await env.DB.prepare(
+      "SELECT msg_id, inbox_id, raw_key FROM messages WHERE deleted_at < ?"
+    )
+      .bind(cutoff)
+      .all<{ msg_id: string; inbox_id: string; raw_key: string | null }>()
+  ).results;
+  for (const msg of expired) {
+    const atts = (
+      await env.DB.prepare("SELECT att_id FROM attachments WHERE msg_id = ?")
+        .bind(msg.msg_id)
+        .all<{ att_id: string }>()
+    ).results;
+    const keys = [
+      ...(msg.raw_key ? [msg.raw_key] : []),
+      ...atts.map((a) => `att/${msg.inbox_id}/${msg.msg_id}/${a.att_id}`)
+    ];
+    for (const key of keys) {
+      await env.MAIL.delete(key);
+    }
+  }
   await env.DB.batch([
     env.DB.prepare(
       "DELETE FROM attachments WHERE msg_id IN (SELECT msg_id FROM messages WHERE deleted_at < ?)"

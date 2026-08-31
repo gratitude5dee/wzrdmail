@@ -271,6 +271,22 @@ async function doSend(
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
   const preview = (input.text ?? "").slice(0, 140);
 
+  // Verify reservation ownership before any deliverable state is committed:
+  // a stale claimant whose reservation was taken over must not schedule or
+  // send another copy.
+  if (reservation) {
+    const renewed = await env.DB.prepare(
+      `UPDATE idempotency_keys SET created_at = ?
+       WHERE org_id = ? AND resource_type = 'message' AND client_id = ?
+         AND response = '' AND owner = ?`
+    )
+      .bind(new Date().toISOString(), ctx.org_id, reservation.clientId, reservation.owner)
+      .run();
+    if (renewed.meta.changes === 0) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
+  }
+
   const rawR2Key = `raw/${ctx.inbox_id}/${msgId}.eml`;
   await env.MAIL.put(rawR2Key, raw);
 
@@ -290,7 +306,7 @@ async function doSend(
     statements.push(
       env.DB.prepare(
         `UPDATE threads SET message_count = message_count + 1, last_message_at = ?,
-           preview = ?, updated_at = ?,
+           preview = ?, updated_at = ?, deleted_at = NULL,
            labels = CASE WHEN EXISTS (SELECT 1 FROM json_each(labels) WHERE value = 'sent')
              THEN labels ELSE json_insert(labels, '$[#]', 'sent') END
          WHERE thread_id = ?`
@@ -341,8 +357,8 @@ async function doSend(
   }
 
   if (reservation) {
-    // Renew the lease and verify ownership immediately before the provider
-    // call: a claimant whose reservation was taken over must not send.
+    // Renew the lease and verify ownership again immediately before the
+    // provider call: a claimant whose reservation was taken over must not send.
     const renewed = await env.DB.prepare(
       `UPDATE idempotency_keys SET created_at = ?
        WHERE org_id = ? AND resource_type = 'message' AND client_id = ?

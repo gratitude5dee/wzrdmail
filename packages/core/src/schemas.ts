@@ -227,8 +227,7 @@ export const UpdateDraftInput = z.object({
 export type UpdateDraftInput = z.infer<typeof UpdateDraftInput>;
 
 export const SendDraftInput = z.object({
-  send_at: IsoTimestamp.optional(),
-  client_id: z.string().max(256).optional()
+  send_at: IsoTimestamp.optional()
 });
 export type SendDraftInput = z.infer<typeof SendDraftInput>;
 

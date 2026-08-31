@@ -198,9 +198,10 @@ drafts.post("/inboxes/:inbox_id/drafts/:draft_id/send", async (c) => {
     reply_to: row.reply_to ?? undefined,
     headers,
     labels: JSON.parse(row.labels) as string[],
-    // Draft sends are idempotent per draft: replays of the same draft send
-    // return the original message instead of sending twice.
-    client_id: body.client_id ?? `draft-send:${row.draft_id}`,
+    // Draft sends are idempotent per draft identity: every send of a draft
+    // shares one idempotency key, so concurrent or repeated sends (whatever
+    // the caller supplies) resolve to a single message.
+    client_id: `draft-send:${row.draft_id}`,
     ...(body.send_at ? { send_at: body.send_at } : {})
   };
   const result = await sendFromDraft(c, auth, inbox, input);
