@@ -211,6 +211,43 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
   const preview = (extractedText ?? text ?? "").slice(0, 140);
 
+  // Atomically claim the Message-ID: only the invocation that wins the unique
+  // insert may commit message/thread/usage side effects, so concurrent
+  // redeliveries cannot both persist.
+  if (email.messageId) {
+    const claimed = await env.DB.prepare(
+      `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id)
+       VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
+    )
+      .bind(inbox.inbox_id, email.messageId, threadId, msgId)
+      .run();
+    if (claimed.meta.changes === 0) {
+      const winner = await env.DB.prepare(
+        "SELECT msg_id, thread_id FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
+      )
+        .bind(inbox.inbox_id, email.messageId)
+        .first<{ msg_id: string; thread_id: string }>();
+      if (winner) {
+        const winnerStored = await env.DB.prepare("SELECT 1 FROM messages WHERE msg_id = ?")
+          .bind(winner.msg_id)
+          .first();
+        if (winnerStored) {
+          return { kind: "duplicate", msg_id: winner.msg_id, thread_id: winner.thread_id };
+        }
+        // The prior claimant died before committing its message: take over.
+        const takeover = await env.DB.prepare(
+          `UPDATE message_id_lookup SET msg_id = ?, thread_id = ?
+           WHERE inbox_id = ? AND rfc822_message_id = ? AND msg_id = ?`
+        )
+          .bind(msgId, threadId, inbox.inbox_id, email.messageId, winner.msg_id)
+          .run();
+        if (takeover.meta.changes === 0) {
+          return { kind: "duplicate", msg_id: winner.msg_id, thread_id: winner.thread_id };
+        }
+      }
+    }
+  }
+
   // Attachments go to R2 before the D1 batch commits.
   const attachmentRows: { att_id: string; filename: string; content_type: string; size: number; content_id: string | null }[] = [];
   for (const att of email.attachments.slice(0, MAX_ATTACHMENTS)) {
@@ -293,14 +330,6 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
       now
     )
   );
-  if (email.messageId) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id)
-         VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
-      ).bind(inbox.inbox_id, email.messageId, threadId, msgId)
-    );
-  }
   for (const att of attachmentRows) {
     statements.push(
       env.DB.prepare(

@@ -50,6 +50,9 @@ const PROTECTED_HEADERS = new Set([
   "content-transfer-encoding"
 ]);
 
+/** An in-flight reservation older than this is presumed dead and can be retried. */
+const RESERVATION_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Outbound pipeline (§6.2). Validations, MIME build, provider send, state
  * transition, event emit. Queue-based async dispatch is M3; v1 sends
@@ -63,15 +66,31 @@ export async function sendMessage(
 ): Promise<SentMessage> {
   if (input.client_id) {
     const replay = await env.DB.prepare(
-      "SELECT response FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+      "SELECT response, created_at FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
     )
       .bind(ctx.org_id, input.client_id)
-      .first<{ response: string }>();
+      .first<{ response: string; created_at: string }>();
     if (replay) {
-      if (replay.response === "") {
+      if (replay.response !== "") {
+        return JSON.parse(replay.response) as SentMessage;
+      }
+      const age = Date.now() - new Date(replay.created_at).getTime();
+      if (age <= RESERVATION_TTL_MS) {
         throw new ApiError("conflict", "a request with this client_id is already in flight");
       }
-      return JSON.parse(replay.response) as SentMessage;
+      // Stale reservation from an interrupted request: exactly one caller may
+      // take it over.
+      const takeover = await env.DB.prepare(
+        `UPDATE idempotency_keys SET created_at = ?
+         WHERE org_id = ? AND resource_type = 'message' AND client_id = ?
+           AND response = '' AND created_at = ?`
+      )
+        .bind(new Date().toISOString(), ctx.org_id, input.client_id, replay.created_at)
+        .run();
+      if (takeover.meta.changes === 0) {
+        throw new ApiError("conflict", "a request with this client_id is already in flight");
+      }
+      return runReserved(env, provider, ctx, input, input.client_id);
     }
     // Reserve the key before any side effects so concurrent retries cannot
     // both reach the provider.
@@ -84,19 +103,30 @@ export async function sendMessage(
     if (reserved.meta.changes === 0) {
       throw new ApiError("conflict", "a request with this client_id is already in flight");
     }
-    try {
-      return await doSend(env, provider, ctx, input);
-    } catch (err) {
-      // A failed request must not poison the client_id for retries.
-      await env.DB.prepare(
-        "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND response = ''"
-      )
-        .bind(ctx.org_id, input.client_id)
-        .run();
-      throw err;
-    }
+    return runReserved(env, provider, ctx, input, input.client_id);
   }
   return doSend(env, provider, ctx, input);
+}
+
+async function runReserved(
+  env: Env,
+  provider: MailProvider,
+  ctx: SendContext,
+  input: SendMessageInput,
+  clientId: string
+): Promise<SentMessage> {
+  try {
+    return await doSend(env, provider, ctx, input);
+  } catch (err) {
+    // Release the client_id for retries — but only while the response is
+    // still empty, i.e. before the provider could have delivered anything.
+    await env.DB.prepare(
+      "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND response = ''"
+    )
+      .bind(ctx.org_id, clientId)
+      .run();
+    throw err;
+  }
 }
 
 async function doSend(
@@ -291,6 +321,22 @@ async function doSend(
     state = "rejected";
     providerError = String(err);
   }
+  const result: SentMessage = {
+    message_id: msgId,
+    thread_id: threadId,
+    state,
+    rfc822_message_id: rfc822MessageId,
+    ...(rejectedRecipients.length > 0 ? { rejected_recipients: rejectedRecipients } : {})
+  };
+  // Persist the idempotency response the moment the provider outcome is known,
+  // so later failures can never release the key and trigger a duplicate send.
+  if (input.client_id) {
+    await env.DB.prepare(
+      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+    )
+      .bind(JSON.stringify(result), ctx.org_id, input.client_id)
+      .run();
+  }
   await env.DB.prepare("UPDATE messages SET state = ?, updated_at = ? WHERE msg_id = ?")
     .bind(state, new Date().toISOString(), msgId)
     .run();
@@ -327,20 +373,6 @@ async function doSend(
 
   if (state === "rejected") {
     console.error(JSON.stringify({ msg: "send_rejected", msg_id: msgId, error: providerError }));
-  }
-  const result: SentMessage = {
-    message_id: msgId,
-    thread_id: threadId,
-    state,
-    rfc822_message_id: rfc822MessageId,
-    ...(rejectedRecipients.length > 0 ? { rejected_recipients: rejectedRecipients } : {})
-  };
-  if (input.client_id) {
-    await env.DB.prepare(
-      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
-    )
-      .bind(JSON.stringify(result), ctx.org_id, input.client_id)
-      .run();
   }
   return result;
 }
