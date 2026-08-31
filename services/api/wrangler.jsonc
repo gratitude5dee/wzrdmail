@@ -33,8 +33,10 @@
   "env": {
     "staging": {
       "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset" },
-      // TODO: switch to { "pattern": "staging.api.wzrd.tech", "custom_domain": true } once the wzrd.tech zone is on Cloudflare
       "workers_dev": true,
+      "routes": [
+        { "pattern": "staging.api.wzrd.tech", "custom_domain": true }
+      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -52,8 +54,8 @@
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset" },
-      // TODO: switch to { "pattern": "api.wzrd.tech", "custom_domain": true } once the wzrd.tech zone is on Cloudflare
       "workers_dev": true,
+      "routes": [{ "pattern": "api.wzrd.tech", "custom_domain": true }],
       "d1_databases": [
         {
           "binding": "DB",
