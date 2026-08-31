@@ -6,83 +6,22 @@ import {
   validateUsername
 } from "@wzrdmail/core";
 import { Hono } from "hono";
-import { createMimeMessage } from "mimetext/browser";
 import { authenticate, hashApiKey } from "../auth.js";
-import { CloudflareEmailProvider } from "../egress/provider.js";
 import type { Env } from "../env.js";
 import { parseBody } from "../lib/http.js";
+import {
+  OTP_MAX_ATTEMPTS,
+  OTP_RESEND_COOLDOWN_MS,
+  SHARED_DOMAIN,
+  issueOtp
+} from "../lib/otp.js";
 
 export const agent = new Hono<{ Bindings: Env }>();
-
-const OTP_TTL_MS = 10 * 60 * 1000;
-const OTP_MAX_ATTEMPTS = 5;
-const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
-const SHARED_DOMAIN = "wzrd.tech";
 
 function randomToken(bytes: number): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
   return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function randomOtp(): string {
-  const buf = new Uint32Array(1);
-  crypto.getRandomValues(buf);
-  return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
-}
-
-/**
- * Emails a fresh OTP and stores it only after delivery succeeds, so a failed
- * send leaves any previously delivered code valid. Returns whether delivery
- * succeeded.
- */
-async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<boolean> {
-  const code = randomOtp();
-  const mime = createMimeMessage();
-  const from = `noreply@${SHARED_DOMAIN}`;
-  mime.setSender(from);
-  mime.setTo(humanEmail);
-  mime.setSubject("Your wzrdmail verification code");
-  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
-  mime.addMessage({
-    contentType: "text/plain",
-    data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-  });
-  const provider = new CloudflareEmailProvider(env);
-  const recipient = humanEmail.toLowerCase();
-  try {
-    const outcome = await provider.send({ from, to: [recipient], raw: mime.asRaw() });
-    if (!outcome.accepted.includes(recipient)) {
-      console.error(
-        JSON.stringify({
-          msg: "otp_send_rejected",
-          org_id: orgId,
-          error: outcome.rejected[0]?.error ?? "recipient not accepted"
-        })
-      );
-      return false;
-    }
-  } catch (err) {
-    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
-    return false;
-  }
-
-  const now = new Date();
-  await env.DB.prepare(
-    `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
-     VALUES (?, 'agent_verify', ?, 0, ?, ?)
-     ON CONFLICT (org_id, purpose) DO UPDATE
-       SET code_hash = excluded.code_hash, attempts = 0,
-           expires_at = excluded.expires_at, created_at = excluded.created_at`
-  )
-    .bind(
-      orgId,
-      await hashApiKey(code),
-      new Date(now.getTime() + OTP_TTL_MS).toISOString(),
-      now.toISOString()
-    )
-    .run();
-  return true;
 }
 
 agent.post("/agent/sign-up", async (c) => {
@@ -142,7 +81,7 @@ agent.post("/agent/sign-up", async (c) => {
     throw err;
   }
 
-  const delivered = await issueOtp(c.env, orgId, humanEmail);
+  const delivered = await issueOtp(c.env, orgId, humanEmail, "agent_verify");
 
   return c.json(
     {
@@ -191,7 +130,7 @@ agent.post("/agent/verify/resend", async (c) => {
       throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
     }
   }
-  const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
+  const delivered = await issueOtp(c.env, auth.org_id, auth.human_email, "agent_verify");
   if (!delivered) {
     // Release the claim so a failed delivery does not start a cooldown; only
     // restore if the row still carries our claim timestamp.

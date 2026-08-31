@@ -38,7 +38,7 @@ If you are an AI agent:
 - Step 0: check for WZRDMAIL_API_KEY in your environment.
 - Step 1: POST https://api.wzrd.tech/v0/agent/sign-up {"human_email", "username"},
   then verify the emailed OTP via POST /v0/agent/verify {"otp_code"}.
-- Step 2: or ask your developer for a key from the console at console.wzrd.tech.
+- Step 2: or ask your developer for a key from the console at console.mail.wzrd.tech.
 - Step 3: connect via MCP (https://mcp.mail.wzrd.tech/mcp, x-api-key header) or
   REST (https://api.wzrd.tech/v0, Authorization: Bearer wm_…).
 

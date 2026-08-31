@@ -18,7 +18,7 @@ describe("landing page", () => {
     expect(body).toContain("Email for AI agents");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
     expect(body).toContain("https://docs.mail.wzrd.tech");
-    expect(body).toContain("https://console.wzrd.tech");
+    expect(body).toContain("https://console.mail.wzrd.tech");
   });
 
   it("shows pricing derived from plans.ts", async () => {
