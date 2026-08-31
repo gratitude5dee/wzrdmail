@@ -1,4 +1,5 @@
-// wzrdmail landing Worker → wzrd.tech + www.wzrd.tech (§14.2 of goal.md).
+// wzrdmail landing Worker → mail.wzrd.tech (§14.2 of goal.md); /docs paths
+// 301 to the docs Worker at docs.mail.wzrd.tech.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wzrdmail-www",

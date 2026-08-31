@@ -77,6 +77,17 @@ describe("landing page", () => {
     expect(res.headers.get("Content-Type")).toContain("text/html");
   });
 
+  it("301s /docs paths to docs.mail.wzrd.tech", async () => {
+    const root = await app.request("/docs", {}, env);
+    expect(root.status).toBe(301);
+    expect(root.headers.get("Location")).toBe("https://docs.mail.wzrd.tech/");
+    const page = await app.request("/docs/quickstart", {}, env);
+    expect(page.status).toBe(301);
+    expect(page.headers.get("Location")).toBe(
+      "https://docs.mail.wzrd.tech/quickstart"
+    );
+  });
+
   it("returns the error envelope on unknown routes", async () => {
     const res = await app.request("/nope", {}, env);
     expect(res.status).toBe(404);

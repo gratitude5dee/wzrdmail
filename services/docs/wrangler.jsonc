@@ -1,4 +1,5 @@
-// wzrdmail docs Worker → docs.mail.wzrd.tech (§14 of goal.md).
+// wzrdmail docs Worker → docs.mail.wzrd.tech (§14 of goal.md). The legacy
+// docs.wzrd.tech hostnames stay routed here and 301 to the new URLs.
 // Static markdown corpus rendered per-request; no storage bindings needed.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -14,13 +15,17 @@
       "vars": { "WZRDMAIL_ENV": "staging" },
       "workers_dev": true,
       "routes": [
-        { "pattern": "staging.docs.mail.wzrd.tech", "custom_domain": true }
+        { "pattern": "staging.docs.mail.wzrd.tech", "custom_domain": true },
+        { "pattern": "staging.docs.wzrd.tech", "custom_domain": true }
       ]
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod" },
       "workers_dev": true,
-      "routes": [{ "pattern": "docs.mail.wzrd.tech", "custom_domain": true }]
+      "routes": [
+        { "pattern": "docs.mail.wzrd.tech", "custom_domain": true },
+        { "pattern": "docs.wzrd.tech", "custom_domain": true }
+      ]
     }
   }
 }

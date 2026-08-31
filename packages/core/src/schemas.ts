@@ -130,6 +130,84 @@ export const AgentVerifyInput = z.object({
   otp_code: z.string().regex(/^\d{6}$/)
 });
 
+export const ReplyMessageInput = z.object({
+  to: z.array(z.string().email()).optional(),
+  cc: z.array(z.string().email()).optional(),
+  bcc: z.array(z.string().email()).optional(),
+  text: z.string().optional(),
+  html: z.string().optional(),
+  reply_to: z.string().email().optional(),
+  headers: z.record(z.string()).optional(),
+  attachments: z.array(SendAttachmentInput).optional(),
+  labels: z.array(z.string()).optional(),
+  client_id: z.string().max(256).optional()
+});
+export type ReplyMessageInput = z.infer<typeof ReplyMessageInput>;
+
+export const ForwardMessageInput = ReplyMessageInput.extend({
+  to: z.array(z.string().email()).min(1)
+});
+export type ForwardMessageInput = z.infer<typeof ForwardMessageInput>;
+
+export const UpdateInboxInput = z.object({
+  display_name: z.string().max(256).nullable().optional()
+});
+export type UpdateInboxInput = z.infer<typeof UpdateInboxInput>;
+
+export const UpdateMessageInput = z.object({
+  labels: z.array(z.string()).optional(),
+  add_labels: z.array(z.string()).optional(),
+  remove_labels: z.array(z.string()).optional()
+});
+export type UpdateMessageInput = z.infer<typeof UpdateMessageInput>;
+
+export const UpdateThreadInput = UpdateMessageInput;
+export type UpdateThreadInput = z.infer<typeof UpdateThreadInput>;
+
+export const BatchGetMessagesInput = z.object({
+  message_ids: z.array(z.string()).min(1).max(100)
+});
+export type BatchGetMessagesInput = z.infer<typeof BatchGetMessagesInput>;
+
+export const BatchUpdateMessagesInput = z.object({
+  message_ids: z.array(z.string()).min(1).max(100),
+  add_labels: z.array(z.string()).optional(),
+  remove_labels: z.array(z.string()).optional()
+});
+export type BatchUpdateMessagesInput = z.infer<typeof BatchUpdateMessagesInput>;
+
+export const Webhook = z.object({
+  webhook_id: z.string(),
+  organization_id: z.string(),
+  inbox_id: InboxId.nullable().optional(),
+  url: z.string().url(),
+  secret: z.string(),
+  enabled: z.boolean(),
+  event_types: z.array(z.string()),
+  client_id: z.string().nullable().optional(),
+  created_at: IsoTimestamp,
+  updated_at: IsoTimestamp
+});
+export type Webhook = z.infer<typeof Webhook>;
+
+export const CreateWebhookInput = z.object({
+  url: z.string().url(),
+  event_types: z.array(z.string()).optional(),
+  inbox_id: z.string().email().optional(),
+  enabled: z.boolean().optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreateWebhookInput = z.infer<typeof CreateWebhookInput>;
+
+export const UpdateWebhookInput = z.object({
+  url: z.string().url().optional(),
+  event_types: z.array(z.string()).optional(),
+  enabled: z.boolean().optional()
+});
+export type UpdateWebhookInput = z.infer<typeof UpdateWebhookInput>;
+
+export const WebhookHeadersInput = z.record(z.string());
+
 export const EventType = z.enum([
   "message.received",
   "message.sent",

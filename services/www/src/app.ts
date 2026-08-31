@@ -17,6 +17,12 @@ const ASSETS: Record<string, { body: ArrayBuffer; type: string }> = {
   "/apple-touch-icon.png": { body: appleTouchIcon, type: "image/png" }
 };
 
+function docsHost(env: Env): string {
+  return env.WZRDMAIL_ENV === "staging"
+    ? "staging.docs.mail.wzrd.tech"
+    : "docs.mail.wzrd.tech";
+}
+
 export function createApp(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -48,6 +54,14 @@ export function createApp(): Hono<{ Bindings: Env }> {
     }
     return c.html(landingHtml());
   });
+
+  // §14.1: docs live on their own hostname; /docs paths 301 there.
+  const redirectToDocs = (c: { req: { path: string }; env: Env }): Response => {
+    const path = c.req.path === "/docs" ? "/" : c.req.path.slice("/docs".length);
+    return Response.redirect(`https://${docsHost(c.env)}${path}`, 301);
+  };
+  app.all("/docs", (c) => redirectToDocs(c));
+  app.all("/docs/*", (c) => redirectToDocs(c));
 
   app.notFound((c) =>
     c.json({ name: "not_found", message: "no such page" }, 404)
