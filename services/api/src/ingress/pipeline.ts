@@ -29,6 +29,17 @@ export type IngestResult =
 const MAX_BODY_BYTES = 64 * 1024;
 /** Guard against crafted MIME with pathological part counts. */
 const MAX_ATTACHMENTS = 100;
+/** A pending Message-ID claim older than this is treated as abandoned. */
+const CLAIM_TTL_MS = 10 * 60 * 1000;
+
+/** Thrown when another invocation is actively ingesting the same Message-ID;
+ * the SMTP layer retries delivery later. */
+export class IngestInFlightError extends Error {
+  constructor(messageId: string) {
+    super(`ingestion already in flight for Message-ID ${messageId}; retry later`);
+    this.name = "IngestInFlightError";
+  }
+}
 
 function truncateBody(value: string | null): { value: string | null; truncated: boolean } {
   if (value === null || value.length <= MAX_BODY_BYTES) {
@@ -132,15 +143,25 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
   if (dsn) return handleDsn(env, inbox, email, dsn);
 
   // SMTP-level retries redeliver the same MIME; the RFC Message-ID makes
-  // redelivery a no-op instead of a duplicate row.
+  // redelivery a no-op instead of a duplicate row. Pending (uncommitted)
+  // claims are not duplicates: a fresh one means another invocation is
+  // ingesting right now, a stale one is abandoned work we may reclaim.
+  let staleClaimMsgId: string | null = null;
   if (email.messageId) {
     const existing = await env.DB.prepare(
-      "SELECT msg_id, thread_id FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
+      "SELECT msg_id, thread_id, committed, claimed_at FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
     )
       .bind(inbox.inbox_id, email.messageId)
-      .first<{ msg_id: string; thread_id: string }>();
+      .first<{ msg_id: string; thread_id: string; committed: number; claimed_at: string | null }>();
     if (existing) {
-      return { kind: "duplicate", msg_id: existing.msg_id, thread_id: existing.thread_id };
+      if (existing.committed === 1) {
+        return { kind: "duplicate", msg_id: existing.msg_id, thread_id: existing.thread_id };
+      }
+      const age = Date.now() - new Date(existing.claimed_at ?? 0).getTime();
+      if (age <= CLAIM_TTL_MS) {
+        throw new IngestInFlightError(email.messageId);
+      }
+      staleClaimMsgId = existing.msg_id;
     }
   }
 
@@ -211,39 +232,38 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
   const preview = (extractedText ?? text ?? "").slice(0, 140);
 
-  // Atomically claim the Message-ID: only the invocation that wins the unique
-  // insert may commit message/thread/usage side effects, so concurrent
-  // redeliveries cannot both persist.
+  // Claim the Message-ID as pending before any side effects: the msg_id is
+  // the ownership token, and only the claim holder may commit. An active
+  // claimant holds a fresh lease and cannot be taken over; abandoned claims
+  // (lease expired, never committed) are reclaimed by exactly one retry.
   if (email.messageId) {
-    const claimed = await env.DB.prepare(
-      `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id)
-       VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
-    )
-      .bind(inbox.inbox_id, email.messageId, threadId, msgId)
-      .run();
-    if (claimed.meta.changes === 0) {
-      const winner = await env.DB.prepare(
-        "SELECT msg_id, thread_id FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
+    if (staleClaimMsgId) {
+      const reclaimed = await env.DB.prepare(
+        `UPDATE message_id_lookup SET msg_id = ?, thread_id = ?, claimed_at = ?
+         WHERE inbox_id = ? AND rfc822_message_id = ? AND committed = 0 AND msg_id = ?`
       )
-        .bind(inbox.inbox_id, email.messageId)
-        .first<{ msg_id: string; thread_id: string }>();
-      if (winner) {
-        const winnerStored = await env.DB.prepare("SELECT 1 FROM messages WHERE msg_id = ?")
-          .bind(winner.msg_id)
-          .first();
-        if (winnerStored) {
-          return { kind: "duplicate", msg_id: winner.msg_id, thread_id: winner.thread_id };
-        }
-        // The prior claimant died before committing its message: take over.
-        const takeover = await env.DB.prepare(
-          `UPDATE message_id_lookup SET msg_id = ?, thread_id = ?
-           WHERE inbox_id = ? AND rfc822_message_id = ? AND msg_id = ?`
+        .bind(msgId, threadId, now, inbox.inbox_id, email.messageId, staleClaimMsgId)
+        .run();
+      if (reclaimed.meta.changes === 0) {
+        throw new IngestInFlightError(email.messageId);
+      }
+    } else {
+      const claimed = await env.DB.prepare(
+        `INSERT INTO message_id_lookup (inbox_id, rfc822_message_id, thread_id, msg_id, committed, claimed_at)
+         VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
+      )
+        .bind(inbox.inbox_id, email.messageId, threadId, msgId, now)
+        .run();
+      if (claimed.meta.changes === 0) {
+        const winner = await env.DB.prepare(
+          "SELECT msg_id, thread_id, committed FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
         )
-          .bind(msgId, threadId, inbox.inbox_id, email.messageId, winner.msg_id)
-          .run();
-        if (takeover.meta.changes === 0) {
+          .bind(inbox.inbox_id, email.messageId)
+          .first<{ msg_id: string; thread_id: string; committed: number }>();
+        if (winner && winner.committed === 1) {
           return { kind: "duplicate", msg_id: winner.msg_id, thread_id: winner.thread_id };
         }
+        throw new IngestInFlightError(email.messageId);
       }
     }
   }
@@ -264,13 +284,31 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     });
   }
 
+  // The commit batch is one transaction. When a Message-ID claim exists, the
+  // first statement flips it to committed if and only if we still own it
+  // (msg_id is the ownership token), and every write is guarded by that same
+  // ownership: a claimant that lost its claim writes nothing at all.
+  const ownershipExists =
+    "EXISTS (SELECT 1 FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ? AND msg_id = ? AND committed = 1)";
+  const guard = email.messageId ? ` AND ${ownershipExists}` : "";
+  const selectGuard = email.messageId ? ` WHERE ${ownershipExists}` : "";
+  const guardBinds = email.messageId ? [inbox.inbox_id, email.messageId, msgId] : [];
+
   const statements: D1PreparedStatement[] = [];
+  if (email.messageId) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE message_id_lookup SET committed = 1
+         WHERE inbox_id = ? AND rfc822_message_id = ? AND msg_id = ? AND committed = 0`
+      ).bind(inbox.inbox_id, email.messageId, msgId)
+    );
+  }
   if (resolution.kind === "new") {
     statements.push(
       env.DB.prepare(
         `INSERT INTO threads (thread_id, org_id, pod_id, inbox_id, subject, normalized_subject,
            preview, participants, labels, message_count, last_message_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?${selectGuard}`
       ).bind(
         threadId,
         inbox.org_id,
@@ -283,7 +321,8 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
         JSON.stringify(["unread"]),
         now,
         now,
-        now
+        now,
+        ...guardBinds
       )
     );
   } else {
@@ -296,8 +335,8 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
              UNION SELECT value FROM json_each(?))),
            labels = CASE WHEN EXISTS (SELECT 1 FROM json_each(labels) WHERE value = 'unread')
              THEN labels ELSE json_insert(labels, '$[#]', 'unread') END
-         WHERE thread_id = ?`
-      ).bind(now, preview, now, JSON.stringify(participants), threadId)
+         WHERE thread_id = ?${guard}`
+      ).bind(now, preview, now, JSON.stringify(participants), threadId, ...guardBinds)
     );
   }
   statements.push(
@@ -306,7 +345,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
          from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html,
          extracted_text, extracted_html, body_truncated, labels, rfc822_message_id, in_reply_to,
          raw_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       SELECT ?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${selectGuard}`
     ).bind(
       msgId,
       inbox.org_id,
@@ -327,18 +366,24 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
       email.inReplyTo ?? null,
       input.rawKey,
       now,
-      now
+      now,
+      ...guardBinds
     )
   );
   for (const att of attachmentRows) {
     statements.push(
       env.DB.prepare(
         `INSERT INTO attachments (att_id, msg_id, inbox_id, filename, content_type, size, content_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(att.att_id, msgId, inbox.inbox_id, att.filename, att.content_type, att.size, att.content_id, now)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?${selectGuard}`
+      ).bind(att.att_id, msgId, inbox.inbox_id, att.filename, att.content_type, att.size, att.content_id, now, ...guardBinds)
     );
   }
-  await env.DB.batch(statements);
+  const batchResults = await env.DB.batch(statements);
+  if (email.messageId && batchResults[0]?.meta.changes === 0) {
+    // Our claim was reclaimed while we were uploading attachments: the guards
+    // above made the whole transaction a no-op, so nothing was persisted.
+    throw new IngestInFlightError(email.messageId);
+  }
 
   await bumpUsage(env.DB, inbox.org_id, "emails_received", 1);
   await bumpUsage(env.DB, inbox.org_id, "storage_bytes", input.raw.byteLength);

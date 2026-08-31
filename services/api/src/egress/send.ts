@@ -65,11 +65,12 @@ export async function sendMessage(
   input: SendMessageInput
 ): Promise<SentMessage> {
   if (input.client_id) {
+    const owner = crypto.randomUUID();
     const replay = await env.DB.prepare(
-      "SELECT response, created_at FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+      "SELECT response, created_at, owner FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
     )
       .bind(ctx.org_id, input.client_id)
-      .first<{ response: string; created_at: string }>();
+      .first<{ response: string; created_at: string; owner: string }>();
     if (replay) {
       if (replay.response !== "") {
         return JSON.parse(replay.response) as SentMessage;
@@ -79,33 +80,40 @@ export async function sendMessage(
         throw new ApiError("conflict", "a request with this client_id is already in flight");
       }
       // Stale reservation from an interrupted request: exactly one caller may
-      // take it over.
+      // take ownership. The owner token guards every later write, so an
+      // expired claimant that is still running can neither reach the provider
+      // nor commit a result after this point.
       const takeover = await env.DB.prepare(
-        `UPDATE idempotency_keys SET created_at = ?
+        `UPDATE idempotency_keys SET created_at = ?, owner = ?
          WHERE org_id = ? AND resource_type = 'message' AND client_id = ?
-           AND response = '' AND created_at = ?`
+           AND response = '' AND owner = ?`
       )
-        .bind(new Date().toISOString(), ctx.org_id, input.client_id, replay.created_at)
+        .bind(new Date().toISOString(), owner, ctx.org_id, input.client_id, replay.owner)
         .run();
       if (takeover.meta.changes === 0) {
         throw new ApiError("conflict", "a request with this client_id is already in flight");
       }
-      return runReserved(env, provider, ctx, input, input.client_id);
+      return runReserved(env, provider, ctx, input, { clientId: input.client_id, owner });
     }
     // Reserve the key before any side effects so concurrent retries cannot
     // both reach the provider.
     const reserved = await env.DB.prepare(
-      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at)
-       VALUES (?, 'message', ?, '', ?) ON CONFLICT DO NOTHING`
+      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at, owner)
+       VALUES (?, 'message', ?, '', ?, ?) ON CONFLICT DO NOTHING`
     )
-      .bind(ctx.org_id, input.client_id, new Date().toISOString())
+      .bind(ctx.org_id, input.client_id, new Date().toISOString(), owner)
       .run();
     if (reserved.meta.changes === 0) {
       throw new ApiError("conflict", "a request with this client_id is already in flight");
     }
-    return runReserved(env, provider, ctx, input, input.client_id);
+    return runReserved(env, provider, ctx, input, { clientId: input.client_id, owner });
   }
-  return doSend(env, provider, ctx, input);
+  return doSend(env, provider, ctx, input, null);
+}
+
+interface Reservation {
+  clientId: string;
+  owner: string;
 }
 
 async function runReserved(
@@ -113,17 +121,18 @@ async function runReserved(
   provider: MailProvider,
   ctx: SendContext,
   input: SendMessageInput,
-  clientId: string
+  reservation: Reservation
 ): Promise<SentMessage> {
   try {
-    return await doSend(env, provider, ctx, input);
+    return await doSend(env, provider, ctx, input, reservation);
   } catch (err) {
-    // Release the client_id for retries — but only while the response is
-    // still empty, i.e. before the provider could have delivered anything.
+    // Release the client_id for retries — but only while we still own the
+    // reservation and the response is empty, i.e. before the provider could
+    // have delivered anything.
     await env.DB.prepare(
-      "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND response = ''"
+      "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND response = '' AND owner = ?"
     )
-      .bind(ctx.org_id, clientId)
+      .bind(ctx.org_id, reservation.clientId, reservation.owner)
       .run();
     throw err;
   }
@@ -133,7 +142,8 @@ async function doSend(
   env: Env,
   provider: MailProvider,
   ctx: SendContext,
-  input: SendMessageInput
+  input: SendMessageInput,
+  reservation: Reservation | null
 ): Promise<SentMessage> {
   const to = input.to.map((a) => a.toLowerCase());
   const cc = (input.cc ?? []).map((a) => a.toLowerCase());
@@ -306,6 +316,21 @@ async function doSend(
   );
   await env.DB.batch(statements);
 
+  if (reservation) {
+    // Renew the lease and verify ownership immediately before the provider
+    // call: a claimant whose reservation was taken over must not send.
+    const renewed = await env.DB.prepare(
+      `UPDATE idempotency_keys SET created_at = ?
+       WHERE org_id = ? AND resource_type = 'message' AND client_id = ?
+         AND response = '' AND owner = ?`
+    )
+      .bind(new Date().toISOString(), ctx.org_id, reservation.clientId, reservation.owner)
+      .run();
+    if (renewed.meta.changes === 0) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
+  }
+
   let state: SentMessage["state"];
   let providerError: string | null = null;
   let rejectedRecipients: { address: string; error: string }[] = [];
@@ -330,11 +355,11 @@ async function doSend(
   };
   // Persist the idempotency response the moment the provider outcome is known,
   // so later failures can never release the key and trigger a duplicate send.
-  if (input.client_id) {
+  if (reservation) {
     await env.DB.prepare(
-      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ?"
+      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND owner = ?"
     )
-      .bind(JSON.stringify(result), ctx.org_id, input.client_id)
+      .bind(JSON.stringify(result), ctx.org_id, reservation.clientId, reservation.owner)
       .run();
   }
   await env.DB.prepare("UPDATE messages SET state = ?, updated_at = ? WHERE msg_id = ?")
