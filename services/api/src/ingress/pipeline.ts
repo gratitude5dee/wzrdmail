@@ -11,6 +11,7 @@ import PostalMime, { type Email } from "postal-mime";
 import type { Env } from "../env.js";
 import { bumpUsage, emitEvent } from "../lib/events.js";
 import { detectDsn } from "./dsn.js";
+import { evaluateSenderLists } from "./lists.js";
 
 export interface IngestInput {
   raw: ArrayBuffer;
@@ -21,6 +22,7 @@ export interface IngestInput {
 
 export type IngestResult =
   | { kind: "unrouted" }
+  | { kind: "blocked"; reason: "block_entry" | "not_allowlisted" }
   | { kind: "dsn"; event: "message.bounced" | "message.complained" }
   | { kind: "duplicate"; msg_id: string; thread_id: string }
   | { kind: "stored"; msg_id: string; thread_id: string };
@@ -135,6 +137,29 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
       JSON.stringify({ msg: "email_unrouted", to: input.envelopeTo, r2_key: input.rawKey })
     );
     return { kind: "unrouted" };
+  }
+
+  const senderVerdict = await evaluateSenderLists(
+    env.DB,
+    inbox.org_id,
+    inbox.inbox_id,
+    input.envelopeFrom
+  );
+  if (senderVerdict.verdict === "blocked") {
+    await emitEvent(env.DB, {
+      type: "message.rejected",
+      org_id: inbox.org_id,
+      pod_id: inbox.pod_id,
+      inbox_id: inbox.inbox_id,
+      data: {
+        direction: "inbound",
+        from: input.envelopeFrom.toLowerCase(),
+        to: input.envelopeTo.toLowerCase(),
+        reason: senderVerdict.reason,
+        pattern: senderVerdict.pattern
+      }
+    });
+    return { kind: "blocked", reason: senderVerdict.reason };
   }
 
   const email = await PostalMime.parse(input.raw);

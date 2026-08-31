@@ -214,6 +214,39 @@ export type UpdateWebhookInput = z.infer<typeof UpdateWebhookInput>;
 
 export const WebhookHeadersInput = z.record(z.string());
 
+/** Exact address (`ada@example.com`) or whole domain (`@example.com`). */
+export const ListPattern = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .refine(
+    (p) =>
+      /^@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(p) ||
+      z.string().email().safeParse(p).success,
+    { message: "pattern must be an email address or @domain" }
+  );
+
+export const ListKind = z.enum(["allow", "block"]);
+export type ListKind = z.infer<typeof ListKind>;
+
+export const ListEntry = z.object({
+  entry_id: z.string(),
+  organization_id: z.string(),
+  inbox_id: InboxId.nullable().optional(),
+  kind: ListKind,
+  pattern: z.string(),
+  created_at: IsoTimestamp
+});
+export type ListEntry = z.infer<typeof ListEntry>;
+
+export const CreateListEntryInput = z.object({
+  kind: ListKind,
+  pattern: ListPattern,
+  inbox_id: z.string().email().optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreateListEntryInput = z.infer<typeof CreateListEntryInput>;
+
 export const EventType = z.enum([
   "message.received",
   "message.sent",
