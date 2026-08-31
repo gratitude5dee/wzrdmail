@@ -10,6 +10,10 @@
     "WZRDMAIL_ENV": "dev",
     "BUILD_SHA": "dev"
   },
+  // Retry sweep + delivery-log retention (inherited by staging/production).
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

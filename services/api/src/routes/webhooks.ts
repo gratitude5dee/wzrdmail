@@ -16,6 +16,12 @@ import {
   requireInbox,
   withIdempotency
 } from "../lib/http.js";
+import {
+  claimAndRun,
+  deliveryJson,
+  DELIVERY_COLUMNS,
+  type DeliveryRow
+} from "../lib/webhook-delivery.js";
 import { webhookJson, type WebhookRow } from "../lib/serialize.js";
 
 export const webhooks = new Hono<{ Bindings: Env }>();
@@ -256,6 +262,105 @@ webhooks.patch("/webhooks/:webhook_id/headers", async (c) => {
     .bind(JSON.stringify(input), now, row.webhook_id)
     .run();
   return c.json(input);
+});
+
+const DELIVERY_STATUSES = new Set(["pending", "success", "failed"]);
+
+async function requireDelivery(
+  c: Context<{ Bindings: Env }>,
+  webhook: WebhookRow,
+  deliveryId: string
+): Promise<DeliveryRow> {
+  const row = await c.env.DB.prepare(
+    `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries WHERE delivery_id = ?`
+  )
+    .bind(deliveryId)
+    .first<DeliveryRow>();
+  if (!row || row.webhook_id !== webhook.webhook_id || row.org_id !== webhook.org_id) {
+    throw new ApiError("not_found", "no such delivery");
+  }
+  return row;
+}
+
+// Delivery log (newest first)
+webhooks.get("/webhooks/:webhook_id/deliveries", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const { limit, cursor } = parsePagination(c);
+  const status = c.req.query("status");
+  if (status !== undefined && !DELIVERY_STATUSES.has(status)) {
+    throw new ApiError("validation_error", "status must be pending, success, or failed");
+  }
+  const conditions = ["webhook_id = ?"];
+  const binds: string[] = [webhook.webhook_id];
+  if (status) {
+    conditions.push("status = ?");
+    binds.push(status);
+  }
+  if (cursor) {
+    conditions.push("(created_at < ? OR (created_at = ? AND delivery_id < ?))");
+    binds.push(cursor.v, cursor.v, cursor.id);
+  }
+  const rows = (
+    await c.env.DB.prepare(
+      `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries WHERE ${conditions.join(" AND ")}
+       ORDER BY created_at DESC, delivery_id DESC LIMIT ?`
+    )
+      .bind(...binds, limit + 1)
+      .all<DeliveryRow>()
+  ).results;
+  const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.delivery_id }));
+  return c.json({
+    deliveries: page.items.map((r) => deliveryJson(r)),
+    next_page_token: page.next_page_token ?? null
+  });
+});
+
+webhooks.get("/webhooks/:webhook_id/deliveries/:delivery_id", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const row = await requireDelivery(c, webhook, c.req.param("delivery_id"));
+  return c.json(deliveryJson(row));
+});
+
+// Manual redelivery: records a fresh attempt of the original event payload
+// and runs it inline. Always safe to repeat — each call is a new attempt row
+// signed with the same svix-id (the event id), so consumers can dedupe.
+webhooks.post("/webhooks/:webhook_id/deliveries/:delivery_id/redeliver", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const source = await requireDelivery(c, webhook, c.req.param("delivery_id"));
+  const last = await c.env.DB.prepare(
+    "SELECT MAX(attempt) AS max_attempt FROM webhook_deliveries WHERE webhook_id = ? AND event_id = ?"
+  )
+    .bind(webhook.webhook_id, source.event_id)
+    .first<{ max_attempt: number }>();
+  const deliveryId = newId("whd");
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO webhook_deliveries
+       (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?, ?)`
+  )
+    .bind(
+      deliveryId,
+      webhook.webhook_id,
+      webhook.org_id,
+      source.event_id,
+      source.event_type,
+      (last?.max_attempt ?? 0) + 1,
+      now,
+      now,
+      now
+    )
+    .run();
+  const inserted = await requireDelivery(c, webhook, deliveryId);
+  await claimAndRun(c.env, inserted);
+  const finished = await requireDelivery(c, webhook, deliveryId);
+  return c.json(deliveryJson(finished), 201);
 });
 
 // Inbox-scoped mirrors

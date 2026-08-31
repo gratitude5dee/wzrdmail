@@ -13,6 +13,7 @@ import { authenticate, requirePermission, type AuthedKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { DnsLookupError, lookupDns } from "../lib/dns.js";
 import { buildEvent } from "../lib/events.js";
+import { deliveryEnqueueStatements, processDueDeliveries } from "../lib/webhook-delivery.js";
 import { collection, parseBody, parsePagination, withIdempotency } from "../lib/http.js";
 
 export const domains = new Hono<{ Bindings: Env }>();
@@ -278,7 +279,17 @@ domains.post("/domains/:domain_id/verify", async (c) => {
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE (SELECT status FROM domains WHERE domain_id = ?) != 'verified'`
       ).bind(...event.values, row.domain_id);
-      await c.env.DB.batch([guardedInsert, update]);
+      const deliveryInserts = await deliveryEnqueueStatements(c.env.DB, {
+        event_id: event.event_id,
+        type: "domain.verified",
+        org_id: auth.org_id
+      });
+      await c.env.DB.batch([guardedInsert, ...deliveryInserts, update]);
+      try {
+        c.executionCtx.waitUntil(processDueDeliveries(c.env));
+      } catch {
+        // no ExecutionContext (unit tests): the scheduled sweep delivers instead
+      }
       batched = true;
     }
   }
