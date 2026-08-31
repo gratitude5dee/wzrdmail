@@ -53,7 +53,7 @@ claude mcp add --transport http wzrdmail https://mcp.wzrd.tech/mcp
 # 6. The CLI gets it too
 npx wzrdmail --format json inboxes list
 
-# 7. The developer opens https://console.wzrd.tech, sees the inbox and its usage,
+# 7. The developer opens https://console.mail.wzrd.tech, sees the inbox and its usage,
 #    hits the Free-tier email cap, clicks Upgrade, pays $20 via Stripe Checkout,
 #    and the limit raise is live before the redirect back lands.
 0.2 What "based on AgentMail" means, precisely
@@ -205,7 +205,7 @@ REST API v0 + WebSockets
 `mcp.wzrd.tech`
 MCP server (Streamable HTTP)
 `services/mcp` Worker
-`console.wzrd.tech`
+`console.mail.wzrd.tech`
 Customer dashboard SPA
 `apps/console` static assets on the api Worker or its own Worker
 `docs.wzrd.tech`
@@ -346,9 +346,9 @@ Event types (v1, AgentMail-compatible names): `message.received`, `message.sent`
 - TypeScript `packages/sdk-ts` → npm `wzrdmail`. Method shape mirrors AgentMail's SDK so ports are mechanical: `new WzrdMailClient({ apiKey })`, `client.inboxes.create({ clientId })`, `client.inboxes.messages.send(inboxId, {…})`, `client.inboxes.messages.list(inboxId, {…})`, `client.inboxes.messages.reply(inboxId, messageId, {…})`, `client.threads.list(…)`, plus `client.ws.connect()`. Hand-rolled thin fetch client typed from the zod schemas (no codegen dependency in v1); throws on 4xx/5xx with `error.body.name/.message`; built-in 429 retry with `Retry-After` + expo backoff (max 3).
 - Python `sdk-python/` → PyPI `wzrdmail`. Same shape: `WzrdMail(api_key=…)`, `client.inboxes.create(client_id=…)`, `client.inboxes.messages.send(inbox_id, to=…, subject=…, text=…)`. httpx, typed with pydantic v2, sync first (async wrapper later).
 - Both ship the copy-paste quickstart from the docs as an executed test (the doc snippet is extracted and run in CI — docs that break fail the build).
-12. Console — `console.wzrd.tech`
+12. Console — `console.mail.wzrd.tech`
 `apps/console`: React + Vite + TanStack Router SPA (EmailFlare admin heritage), served as Worker static assets; talks only to the public API plus a small `/console/*` session-auth route group (no second API).
-- Auth: email + OTP via better-auth (D1 adapter, email-OTP plugin) issuing httpOnly session cookies scoped to `console.wzrd.tech`; the OTP email is sent through wzrdmail itself (dogfood; `noreply@wzrd.tech`). Org switcher; invite flow gated by seat limits.
+- Auth: email + OTP via better-auth (D1 adapter, email-OTP plugin) issuing httpOnly session cookies scoped to `console.mail.wzrd.tech`; the OTP email is sent through wzrdmail itself (dogfood; `noreply@wzrd.tech`). Org switcher; invite flow gated by seat limits.
 - Pages: Onboarding (create org → verify email → first inbox → copy key → "connect your agent" panel with MCP/CLI/curl tabs); Inboxes (list/create, per-inbox thread viewer with rendered `extracted_html`, reply box for humans); Domains (add → NS records → live verification status → DNS record table copyable); API keys (create scoped, reveal-once, last-used); Webhooks (CRUD, recent deliveries with status + redeliver button, secret rotation); Pods; Usage (metric vs plan-limit bars, month picker); Billing (§13: current plan, upgrade/downgrade → Stripe Checkout, invoices → Stripe Portal); Settings (org name, members/seats, danger zone).
 - Admin area (`/admin`, platform staff only, gated by `user.is_staff`): org search, plan overrides, suppression browser, global send counter vs account quota, webhook DLQ browser, domain queue.
 - E2E: Playwright against a staging deploy — signup → inbox → send-to-self → see thread → upgrade with Stripe test card → limit raised.
@@ -396,7 +396,7 @@ custom
 invoice billing; manual plan row
 - Objects: one Stripe Product per paid plan, monthly Prices; `subscription` row mirrors Stripe state. Checkout Sessions for upgrade (customer created lazily), Billing Portal for card/invoice/cancel/downgrade. Prices referenced by env-provided ids (`STRIPE_PRICE_DEVELOPER`, `STRIPE_PRICE_STARTUP`) so test/live modes differ only in secrets.
 - Webhook `/v0/stripe/webhook` (signature-verified with `constructEventAsync`, idempotent by Stripe event id): handle `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `invoice.paid`, `invoice.payment_failed`. Subscription state machine: `active`/`trialing` → plan entitlements; `past_due` → 14-day grace (send works, banner); `canceled`/`unpaid` → drop to `free` entitlements (inboxes over the cap freeze receive-only, never deleted; data retained 90 days beyond plan storage before archival warning).
-- Enforcement: middleware reads `subscription.plan` → `plans.ts` → checks `usage_counters` before inbox-create, send, domain-add, seat-invite. Over-limit → `403 {"name":"plan_limit_exceeded","message":"…upgrade at https://console.wzrd.tech/billing"}` (AgentMail-style hard stop, no overage billing in v1).
+- Enforcement: middleware reads `subscription.plan` → `plans.ts` → checks `usage_counters` before inbox-create, send, domain-add, seat-invite. Over-limit → `403 {"name":"plan_limit_exceeded","message":"…upgrade at https://console.mail.wzrd.tech/billing"}` (AgentMail-style hard stop, no overage billing in v1).
 - Metering: counters incremented in the same transaction as the action; nightly Queues cron reconciles storage_bytes from R2 listings.
 - Test with Stripe CLI fixtures + test clocks (renewal, failed payment, downgrade at period end) in CI against a mock; manually once against live test mode before launch.
 14. Docs — `docs.wzrd.tech`

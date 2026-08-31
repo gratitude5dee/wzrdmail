@@ -167,7 +167,7 @@ footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--bo
 <body>
 <header>
   <a class="brand" href="/"><img src="/logo.png" alt="wzrdmail logo" width="26" height="26">wzrdmail</a>
-  <nav><a href="https://docs.mail.wzrd.tech">Docs</a><a href="https://console.wzrd.tech">Console</a><a href="/llms.txt">llms.txt</a></nav>
+  <nav><a href="https://docs.mail.wzrd.tech">Docs</a><a href="https://console.mail.wzrd.tech">Console</a><a href="/llms.txt">llms.txt</a></nav>
 </header>
 <main>
 <section class="hero">
@@ -177,7 +177,7 @@ footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--bo
   <p class="tagline">Real, persistent, two-way inboxes at <code>@wzrd.tech</code> — created by API in milliseconds, addressable from the whole internet, threaded, searchable, evented.</p>
   <div class="cta">
     <a class="btn" href="https://docs.mail.wzrd.tech/quickstart">Get started</a>
-    <a class="btn ghost" href="https://console.wzrd.tech">Open console</a>
+    <a class="btn ghost" href="https://console.mail.wzrd.tech">Open console</a>
   </div>
 </section>
 <section>
@@ -196,7 +196,7 @@ ${planCard("startup", PLANS.startup, false)}
 </main>
 <footer>
   <p>Migrating from AgentMail? It's a base-URL and key-prefix swap: <a href="https://docs.mail.wzrd.tech/migrate-from-agentmail">read the guide</a>.</p>
-  <p><a href="https://docs.mail.wzrd.tech">docs.mail.wzrd.tech</a> · <a href="https://console.wzrd.tech">console.wzrd.tech</a> · <a href="/llms.txt">/llms.txt</a> (if you are an AI agent, start there)</p>
+  <p><a href="https://docs.mail.wzrd.tech">docs.mail.wzrd.tech</a> · <a href="https://console.mail.wzrd.tech">console.mail.wzrd.tech</a> · <a href="/llms.txt">/llms.txt</a> (if you are an AI agent, start there)</p>
 </footer>
 </body>
 </html>`;

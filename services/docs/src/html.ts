@@ -174,7 +174,7 @@ export function pageHtml(
   <a class="brand" href="${basePath}/"><img src="https://mail.wzrd.tech/logo.png" alt="wzrdmail logo" width="22" height="22">wzrdmail <span class="tag chrome">docs</span></a>
   <nav>
     <a href="https://mail.wzrd.tech">mail.wzrd.tech</a>
-    <a href="https://console.wzrd.tech">Console</a>
+    <a href="https://console.mail.wzrd.tech">Console</a>
     <a href="${basePath}/llms.txt">llms.txt</a>
   </nav>
 </header>

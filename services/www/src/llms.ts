@@ -29,7 +29,7 @@ Then verify with the OTP from the developer's inbox:
       -d '{"otp_code": "482913"}'
 
 Step 2 — Or ask your developer for a key. They can mint one at
-https://console.wzrd.tech and set it as WZRDMAIL_API_KEY.
+https://console.mail.wzrd.tech and set it as WZRDMAIL_API_KEY.
 
 Step 3 — Connect via MCP or REST:
 
