@@ -121,6 +121,29 @@ export const CreateInboxInput = z.object({
 });
 export type CreateInboxInput = z.infer<typeof CreateInboxInput>;
 
+/** RFC 1035 hostname: dot-separated labels, no leading/trailing hyphen, alpha TLD. */
+export const DOMAIN_NAME_RE =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+export const DomainStatus = z.enum(["pending", "verified", "failed"]);
+export type DomainStatus = z.infer<typeof DomainStatus>;
+
+/** Canonical form for domain names: trimmed, lowercased, no trailing root dot. */
+export function normalizeDomainName(v: string): string {
+  return v.trim().toLowerCase().replace(/\.$/, "");
+}
+
+export const CreateDomainInput = z.object({
+  domain: z
+    .string()
+    .min(1)
+    .max(253)
+    .transform(normalizeDomainName)
+    .refine((v) => DOMAIN_NAME_RE.test(v), { message: "must be a valid domain name" }),
+  client_id: z.string().max(256).optional()
+});
+export type CreateDomainInput = z.infer<typeof CreateDomainInput>;
+
 export const AgentSignUpInput = z.object({
   human_email: z.string().email(),
   username: z.string()

@@ -64,9 +64,12 @@ function eventMatches(eventTypes: string, type: string): boolean {
 
 /**
  * Build one pending-delivery insert per subscribed webhook, for the caller to
- * batch atomically with the event insert. Rows are durable before any HTTP
- * happens, so a crash between enqueue and attempt can never drop an event —
- * the sweep picks the row up by its due time.
+ * batch atomically with the event insert. Each insert is guarded on the event
+ * row existing, so batching after a conditional event insert (e.g. the
+ * domain.verified transition guard) enqueues deliveries only when the event
+ * was actually written. Rows are durable before any HTTP happens, so a crash
+ * between enqueue and attempt can never drop an event — the sweep picks the
+ * row up by its due time.
  */
 export async function deliveryEnqueueStatements(
   db: D1Database,
@@ -88,9 +91,10 @@ export async function deliveryEnqueueStatements(
       .prepare(
         `INSERT INTO webhook_deliveries
            (delivery_id, webhook_id, org_id, event_id, event_type, attempt, manual, status, next_retry_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 0, 'pending', ?, ?, ?)`
+         SELECT ?, ?, ?, ?, ?, 1, 0, 'pending', ?, ?, ?
+         WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?)`
       )
-      .bind(newId("whd"), h.webhook_id, event.org_id, event.event_id, event.type, now, now, now)
+      .bind(newId("whd"), h.webhook_id, event.org_id, event.event_id, event.type, now, now, now, event.event_id)
   );
 }
 
