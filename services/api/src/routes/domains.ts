@@ -50,6 +50,7 @@ function domainJson(row: DomainRow): Record<string, unknown> {
   return {
     domain_id: row.domain_id,
     organization_id: row.org_id,
+    domain: row.name,
     name: row.name,
     status: row.status,
     verified: row.status === "verified",

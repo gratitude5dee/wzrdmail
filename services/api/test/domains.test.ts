@@ -102,6 +102,7 @@ describe("domains CRUD (§6.6)", () => {
     const body = await createDomain(key);
     expect(body.organization_id).toBe(org_id);
     expect(body.name).toBe("acme.com");
+    expect(body.domain).toBe("acme.com");
     expect(body.status).toBe("pending");
     expect(body.verified).toBe(false);
     const records = body.dns_records as { type: string; name: string; value: string }[];
