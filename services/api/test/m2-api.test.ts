@@ -208,6 +208,7 @@ describe("agent onboarding (§M2)", () => {
       env
     );
     expect(tooSoon.status).toBe(429);
+    expect(Number(tooSoon.headers.get("Retry-After"))).toBeGreaterThan(0);
 
     // Past the cooldown, delivery fails in tests (no EMAIL binding) — the
     // pending code must survive.

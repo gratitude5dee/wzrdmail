@@ -49,8 +49,19 @@ async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<bo
     data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
   });
   const provider = new CloudflareEmailProvider(env);
+  const recipient = humanEmail.toLowerCase();
   try {
-    await provider.send({ from, to: [humanEmail.toLowerCase()], raw: mime.asRaw() });
+    const outcome = await provider.send({ from, to: [recipient], raw: mime.asRaw() });
+    if (!outcome.accepted.includes(recipient)) {
+      console.error(
+        JSON.stringify({
+          msg: "otp_send_rejected",
+          org_id: orgId,
+          error: outcome.rejected[0]?.error ?? "recipient not accepted"
+        })
+      );
+      return false;
+    }
   } catch (err) {
     console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
     return false;
@@ -158,8 +169,25 @@ agent.post("/agent/verify/resend", async (c) => {
   )
     .bind(auth.org_id)
     .first<{ created_at: string }>();
-  if (pending && Date.now() - new Date(pending.created_at).getTime() < OTP_RESEND_COOLDOWN_MS) {
-    throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
+  if (pending) {
+    const remainingMs =
+      OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(pending.created_at).getTime());
+    if (remainingMs > 0) {
+      c.header("Retry-After", String(Math.ceil(remainingMs / 1000)));
+      throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
+    }
+    // Claim the cooldown window atomically so concurrent resends cannot each
+    // trigger a send: only the request that bumps created_at proceeds.
+    const claimed = await c.env.DB.prepare(
+      `UPDATE otp_codes SET created_at = ?
+       WHERE org_id = ? AND purpose = 'agent_verify' AND created_at = ?`
+    )
+      .bind(new Date().toISOString(), auth.org_id, pending.created_at)
+      .run();
+    if (claimed.meta.changes === 0) {
+      c.header("Retry-After", String(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000)));
+      throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
+    }
   }
   const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
   if (!delivered) {
