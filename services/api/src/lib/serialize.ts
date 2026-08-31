@@ -124,13 +124,17 @@ export function threadJson(row: ThreadRow): Record<string, unknown> {
   };
 }
 
-export function webhookJson(row: WebhookRow): Record<string, unknown> {
+/** The signing secret is only included on create (`includeSecret`). */
+export function webhookJson(
+  row: WebhookRow,
+  options?: { includeSecret: boolean }
+): Record<string, unknown> {
   return {
     webhook_id: row.webhook_id,
     organization_id: row.org_id,
     inbox_id: row.inbox_id,
     url: row.url,
-    secret: row.secret,
+    ...(options?.includeSecret ? { secret: row.secret } : {}),
     enabled: row.enabled === 1,
     event_types: jsonArray(row.event_types),
     client_id: row.client_id,
@@ -139,10 +143,13 @@ export function webhookJson(row: WebhookRow): Record<string, unknown> {
   };
 }
 
-/** Merge label mutations: `labels` replaces; add/remove adjust the current set. */
+/**
+ * Merge label mutations: `labels` replaces; add/remove adjust the current set;
+ * `read` maps to the presence of the `unread` label.
+ */
 export function applyLabelPatch(
   current: string[],
-  patch: { labels?: string[]; add_labels?: string[]; remove_labels?: string[] }
+  patch: { labels?: string[]; add_labels?: string[]; remove_labels?: string[]; read?: boolean }
 ): string[] {
   let next = patch.labels ? [...patch.labels] : [...current];
   for (const l of patch.add_labels ?? []) {
@@ -150,6 +157,11 @@ export function applyLabelPatch(
   }
   if (patch.remove_labels) {
     next = next.filter((l) => !patch.remove_labels?.includes(l));
+  }
+  if (patch.read === true) {
+    next = next.filter((l) => l !== "unread");
+  } else if (patch.read === false && !next.includes("unread")) {
+    next.push("unread");
   }
   return next;
 }

@@ -30,7 +30,8 @@ function randomOtp(): string {
   return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
 }
 
-async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<void> {
+/** Stores a fresh OTP and emails it; returns whether delivery succeeded. */
+async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<boolean> {
   const code = randomOtp();
   const now = new Date();
   await env.DB.prepare(
@@ -61,10 +62,10 @@ async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<vo
   const provider = new CloudflareEmailProvider(env);
   try {
     await provider.send({ from, to: [humanEmail.toLowerCase()], raw: mime.asRaw() });
+    return true;
   } catch (err) {
-    // Sign-up still succeeds; the org can re-trigger delivery by signing up
-    // support channels. Log for ops.
     console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
+    return false;
   }
 }
 
@@ -100,25 +101,32 @@ agent.post("/agent/sign-up", async (c) => {
   const apiKey = `wm_live_${randomToken(24)}`;
   const now = new Date().toISOString();
 
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO organizations (org_id, name, plan, human_email, verified, created_at, updated_at)
-       VALUES (?, ?, 'free', ?, 0, ?, ?)`
-    ).bind(orgId, verdict.username, humanEmail, now, now),
-    c.env.DB.prepare(
-      "INSERT INTO pods (pod_id, org_id, name, created_at) VALUES (?, ?, 'default', ?)"
-    ).bind(podId, orgId, now),
-    c.env.DB.prepare(
-      `INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, created_at)
-       VALUES (?, ?, NULL, ?, ?, 'admin', ?)`
-    ).bind(keyId, orgId, await hashApiKey(apiKey), apiKey.slice(0, 12), now),
-    c.env.DB.prepare(
-      `INSERT INTO inboxes (inbox_id, org_id, pod_id, username, domain, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(inboxId, orgId, podId, verdict.username, SHARED_DOMAIN, now, now)
-  ]);
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO organizations (org_id, name, plan, human_email, verified, created_at, updated_at)
+         VALUES (?, ?, 'free', ?, 0, ?, ?)`
+      ).bind(orgId, verdict.username, humanEmail, now, now),
+      c.env.DB.prepare(
+        "INSERT INTO pods (pod_id, org_id, name, created_at) VALUES (?, ?, 'default', ?)"
+      ).bind(podId, orgId, now),
+      c.env.DB.prepare(
+        `INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, created_at)
+         VALUES (?, ?, NULL, ?, ?, 'admin', ?)`
+      ).bind(keyId, orgId, await hashApiKey(apiKey), apiKey.slice(0, 12), now),
+      c.env.DB.prepare(
+        `INSERT INTO inboxes (inbox_id, org_id, pod_id, username, domain, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(inboxId, orgId, podId, verdict.username, SHARED_DOMAIN, now, now)
+    ]);
+  } catch (err) {
+    if (String(err).includes("UNIQUE")) {
+      throw new ApiError("conflict", "this email or username is already registered");
+    }
+    throw err;
+  }
 
-  await issueOtp(c.env, orgId, humanEmail);
+  const delivered = await issueOtp(c.env, orgId, humanEmail);
 
   return c.json(
     {
@@ -127,34 +135,51 @@ agent.post("/agent/sign-up", async (c) => {
       organization_id: orgId,
       pod_id: podId,
       verified: false,
-      message: `Verification code sent to ${humanEmail}. POST /v0/agent/verify with {"otp_code": "…"} to unlock external sending.`
+      message: delivered
+        ? `Verification code sent to ${humanEmail}. POST /v0/agent/verify with {"otp_code": "…"} to unlock external sending.`
+        : `We could not deliver the verification code to ${humanEmail}. POST /v0/agent/verify/resend to try again.`
     },
     201
   );
+});
+
+agent.post("/agent/verify/resend", async (c) => {
+  const auth = await authenticate(c);
+  if (auth.org_verified) {
+    throw new ApiError("conflict", "organization is already verified");
+  }
+  const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
+  if (!delivered) {
+    throw new ApiError("internal_error", "could not deliver the verification code; try again later");
+  }
+  return c.json({ organization_id: auth.org_id, message: `Verification code sent to ${auth.human_email}.` });
 });
 
 agent.post("/agent/verify", async (c) => {
   const auth = await authenticate(c);
   const input = await parseBody(c, AgentVerifyInput);
   const row = await c.env.DB.prepare(
-    "SELECT code_hash, attempts, expires_at FROM otp_codes WHERE org_id = ? AND purpose = 'agent_verify'"
+    "SELECT code_hash, expires_at FROM otp_codes WHERE org_id = ? AND purpose = 'agent_verify'"
   )
     .bind(auth.org_id)
-    .first<{ code_hash: string; attempts: number; expires_at: string }>();
+    .first<{ code_hash: string; expires_at: string }>();
   if (!row) throw new ApiError("not_found", "no pending verification code");
-  if (row.attempts >= OTP_MAX_ATTEMPTS) {
-    throw new ApiError("forbidden", "too many attempts; request a new code");
-  }
   if (new Date(row.expires_at).getTime() < Date.now()) {
     throw new ApiError("forbidden", "verification code expired");
   }
+  // Consume an attempt atomically before comparing, so concurrent guesses
+  // cannot all pass the limit check on a shared snapshot.
+  const consumed = await c.env.DB.prepare(
+    `UPDATE otp_codes SET attempts = attempts + 1
+     WHERE org_id = ? AND purpose = 'agent_verify' AND attempts < ?`
+  )
+    .bind(auth.org_id, OTP_MAX_ATTEMPTS)
+    .run();
+  if (consumed.meta.changes === 0) {
+    throw new ApiError("forbidden", "too many attempts; request a new code");
+  }
   const matches = row.code_hash === (await hashApiKey(input.otp_code));
   if (!matches) {
-    await c.env.DB.prepare(
-      "UPDATE otp_codes SET attempts = attempts + 1 WHERE org_id = ? AND purpose = 'agent_verify'"
-    )
-      .bind(auth.org_id)
-      .run();
     throw new ApiError("validation_error", "incorrect verification code");
   }
   const now = new Date().toISOString();

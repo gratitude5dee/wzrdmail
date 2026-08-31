@@ -12,8 +12,8 @@ export async function seedInbox(options?: {
   const podId = `pod_test_${crypto.randomUUID().slice(0, 8)}`;
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT INTO organizations (org_id, name, human_email, verified, created_at, updated_at) VALUES (?, 'test', 'owner@example.com', ?, ?, ?)"
-    ).bind(orgId, options?.verified === false ? 0 : 1, NOW, NOW),
+      "INSERT INTO organizations (org_id, name, human_email, verified, created_at, updated_at) VALUES (?, 'test', ?, ?, ?, ?)"
+    ).bind(orgId, `${orgId}@example.com`, options?.verified === false ? 0 : 1, NOW, NOW),
     env.DB.prepare(
       "INSERT INTO pods (pod_id, org_id, created_at) VALUES (?, ?, ?)"
     ).bind(podId, orgId, NOW),

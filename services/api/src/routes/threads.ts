@@ -68,7 +68,7 @@ async function listThreads(
   ).results;
   const page = collection(rows, limit, (r): PageCursor => ({ v: r.last_message_at, id: r.thread_id }));
   return c.json({
-    items: page.items.map(threadJson),
+    threads: page.items.map(threadJson),
     next_page_token: page.next_page_token ?? null
   });
 }

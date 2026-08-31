@@ -217,8 +217,8 @@ describe("inbox CRUD (§M2)", () => {
 
     const list = await app.request("/v0/inboxes?limit=1", authed(key), env);
     expect(list.status).toBe(200);
-    const listBody = (await list.json()) as { items: unknown[]; next_page_token: string | null };
-    expect(listBody.items).toHaveLength(1);
+    const listBody = (await list.json()) as { inboxes: unknown[]; next_page_token: string | null };
+    expect(listBody.inboxes).toHaveLength(1);
     expect(listBody.next_page_token).not.toBeNull();
 
     const page2 = await app.request(
@@ -226,8 +226,8 @@ describe("inbox CRUD (§M2)", () => {
       authed(key),
       env
     );
-    const page2Body = (await page2.json()) as { items: { inbox_id: string }[] };
-    expect(page2Body.items.length).toBeGreaterThanOrEqual(1);
+    const page2Body = (await page2.json()) as { inboxes: { inbox_id: string }[] };
+    expect(page2Body.inboxes.length).toBeGreaterThanOrEqual(1);
 
     const got = await app.request(
       `/v0/inboxes/${encodeURIComponent(createdBody.inbox_id)}`,
@@ -293,10 +293,10 @@ describe("message endpoints (§M2)", () => {
     const list = await app.request(`${base}?limit=1`, authed(key), env);
     expect(list.status).toBe(200);
     const listBody = (await list.json()) as {
-      items: { message_id: string }[];
+      messages: { message_id: string }[];
       next_page_token: string | null;
     };
-    expect(listBody.items[0]!.message_id).toBe(late.msg_id);
+    expect(listBody.messages[0]!.message_id).toBe(late.msg_id);
     expect(listBody.next_page_token).not.toBeNull();
 
     const page2 = await app.request(
@@ -304,12 +304,12 @@ describe("message endpoints (§M2)", () => {
       authed(key),
       env
     );
-    const page2Body = (await page2.json()) as { items: { message_id: string }[] };
-    expect(page2Body.items[0]!.message_id).toBe(early.msg_id);
+    const page2Body = (await page2.json()) as { messages: { message_id: string }[] };
+    expect(page2Body.messages[0]!.message_id).toBe(early.msg_id);
 
     const labeled = await app.request(`${base}?labels=work`, authed(key), env);
-    const labeledBody = (await labeled.json()) as { items: { message_id: string }[] };
-    expect(labeledBody.items.map((m) => m.message_id)).toEqual([early.msg_id]);
+    const labeledBody = (await labeled.json()) as { messages: { message_id: string }[] };
+    expect(labeledBody.messages.map((m) => m.message_id)).toEqual([early.msg_id]);
 
     const got = await app.request(`${base}/${early.msg_id}`, authed(key), env);
     expect(got.status).toBe(200);
@@ -328,8 +328,8 @@ describe("message endpoints (§M2)", () => {
       authed(key),
       env
     );
-    const body = (await res.json()) as { items: { message_id: string }[] };
-    expect(body.items.map((m) => m.message_id)).toEqual([hit.msg_id]);
+    const body = (await res.json()) as { messages: { message_id: string }[] };
+    expect(body.messages.map((m) => m.message_id)).toEqual([hit.msg_id]);
   });
 
   it("serves raw MIME from R2", async () => {
@@ -384,9 +384,30 @@ describe("message endpoints (§M2)", () => {
       }),
       env
     );
-    const batchBody = (await batchGet.json()) as { items: { labels: string[] }[] };
-    expect(batchBody.items).toHaveLength(2);
-    for (const item of batchBody.items) expect(item.labels).toContain("seen");
+    const batchBody = (await batchGet.json()) as { messages: { labels: string[] }[] };
+    expect(batchBody.messages).toHaveLength(2);
+    for (const item of batchBody.messages) expect(item.labels).toContain("seen");
+  });
+
+  it("maps read updates onto the unread label", async () => {
+    const inbox = await seedInbox({ address: `rd-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const msg = await seedMessage(inbox, { labels: ["unread"] });
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages`;
+
+    const read = await app.request(
+      `${base}/${msg.msg_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ read: true }) }),
+      env
+    );
+    expect(((await read.json()) as { labels: string[] }).labels).not.toContain("unread");
+
+    const unread = await app.request(
+      `${base}/${msg.msg_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ read: false }) }),
+      env
+    );
+    expect(((await unread.json()) as { labels: string[] }).labels).toContain("unread");
   });
 
   it("blocks cross-org message reads", async () => {
@@ -412,8 +433,8 @@ describe("thread endpoints (§M2)", () => {
     const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/threads`;
     const list = await app.request(base, authed(key), env);
     expect(list.status).toBe(200);
-    const listBody = (await list.json()) as { items: { thread_id: string }[] };
-    expect(listBody.items.map((t) => t.thread_id)).toContain(msg.thread_id);
+    const listBody = (await list.json()) as { threads: { thread_id: string }[] };
+    expect(listBody.threads.map((t) => t.thread_id)).toContain(msg.thread_id);
 
     const got = await app.request(`${base}/${msg.thread_id}`, authed(key), env);
     expect(got.status).toBe(200);
@@ -421,8 +442,8 @@ describe("thread endpoints (§M2)", () => {
     expect(gotBody.messages.map((m) => m.message_id)).toEqual([msg.msg_id]);
 
     const search = await app.request(`${base}/search?query=walrus`, authed(key), env);
-    const searchBody = (await search.json()) as { items: { thread_id: string }[] };
-    expect(searchBody.items.map((t) => t.thread_id)).toEqual([msg.thread_id]);
+    const searchBody = (await search.json()) as { threads: { thread_id: string }[] };
+    expect(searchBody.threads.map((t) => t.thread_id)).toEqual([msg.thread_id]);
 
     const orgWide = await app.request(`/v0/threads/${msg.thread_id}`, authed(key), env);
     expect(orgWide.status).toBe(200);
@@ -484,8 +505,12 @@ describe("webhook CRUD (§M2)", () => {
     );
 
     const list = await app.request("/v0/webhooks", authed(key), env);
-    const listBody = (await list.json()) as { items: { webhook_id: string }[] };
-    expect(listBody.items.map((w) => w.webhook_id)).toContain(createdBody.webhook_id);
+    const listBody = (await list.json()) as { webhooks: { webhook_id: string; secret?: string }[] };
+    expect(listBody.webhooks.map((w) => w.webhook_id)).toContain(createdBody.webhook_id);
+    for (const w of listBody.webhooks) expect(w.secret).toBeUndefined();
+
+    const got = await app.request(`/v0/webhooks/${createdBody.webhook_id}`, authed(key), env);
+    expect(((await got.json()) as { secret?: string }).secret).toBeUndefined();
 
     const patched = await app.request(
       `/v0/webhooks/${createdBody.webhook_id}`,

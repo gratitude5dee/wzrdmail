@@ -115,10 +115,14 @@ export async function requireInbox(
   return inbox;
 }
 
+/** An in-flight reservation older than this is presumed dead and can be retried. */
+const RESERVATION_TTL_MS = 10 * 60 * 1000;
+
 /**
  * client_id replay for cheap create endpoints (§7): first writer wins the
  * reservation, finishes the create, and stores the response; replays return
- * the stored response verbatim.
+ * the stored response verbatim. Stale empty reservations (an interrupted
+ * create) can be taken over by exactly one retry via the owner token.
  */
 export async function withIdempotency<T>(
   db: D1Database,
@@ -139,12 +143,26 @@ export async function withIdempotency<T>(
   if (reserved.meta.changes === 0) {
     const replay = await db
       .prepare(
-        "SELECT response FROM idempotency_keys WHERE org_id = ? AND resource_type = ? AND client_id = ?"
+        "SELECT response, created_at, owner FROM idempotency_keys WHERE org_id = ? AND resource_type = ? AND client_id = ?"
       )
       .bind(orgId, resourceType, clientId)
-      .first<{ response: string }>();
+      .first<{ response: string; created_at: string; owner: string }>();
     if (replay && replay.response !== "") return JSON.parse(replay.response) as T;
-    throw new ApiError("conflict", "a request with this client_id is already in flight");
+    const age = replay ? Date.now() - new Date(replay.created_at).getTime() : 0;
+    if (!replay || age <= RESERVATION_TTL_MS) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
+    const takeover = await db
+      .prepare(
+        `UPDATE idempotency_keys SET created_at = ?, owner = ?
+         WHERE org_id = ? AND resource_type = ? AND client_id = ?
+           AND response = '' AND owner = ?`
+      )
+      .bind(new Date().toISOString(), owner, orgId, resourceType, clientId, replay.owner)
+      .run();
+    if (takeover.meta.changes === 0) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
   }
   try {
     const result = await create();
