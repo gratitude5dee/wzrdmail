@@ -279,6 +279,21 @@ describe("wzrdmail CLI", () => {
     expect(h.stderr.join("\n")).toContain("plan_limit_exceeded");
   });
 
+  it("unsupported --format value is a usage error (exit 1)", async () => {
+    const h = harness([]);
+    const code = await run(["--format", "yaml", "inboxes", "list"], h.io());
+    expect(code).toBe(EXIT_ERROR);
+    expect(h.stderr.join("\n")).toContain('--format must be "table" or "json"');
+    expect(h.calls.length).toBe(0);
+  });
+
+  it("valueless trailing --format is a usage error, not an uncaught throw", async () => {
+    const h = harness([]);
+    const code = await run(["inboxes", "list", "--format"], h.io());
+    expect(code).toBe(EXIT_ERROR);
+    expect(h.stderr.join("\n")).toContain('--format must be "table" or "json"');
+  });
+
   it("unknown commands print usage and exit 1", async () => {
     const h = harness([]);
     const code = await run(["bogus"], h.io());

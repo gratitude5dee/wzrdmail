@@ -208,12 +208,8 @@ function errorExitCode(error: WzrdmailError): number {
 
 export async function run(argv: string[], io: RunIo): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
-  const format: Format = stringFlag(flags, "format") === "json" ? "json" : "table";
-
-  if (flags["help"] === true || positionals.length === 0) {
-    io.stdout(HELP);
-    return EXIT_OK;
-  }
+  const rawFormat = flags["format"];
+  const format: Format = rawFormat === "json" ? "json" : "table";
 
   const client = new WzrdMailClient({
     apiKey: io.env["WZRDMAIL_API_KEY"],
@@ -222,6 +218,13 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
   });
 
   try {
+    if (rawFormat !== undefined && rawFormat !== "json" && rawFormat !== "table") {
+      throw new UsageError('--format must be "table" or "json"');
+    }
+    if (flags["help"] === true || positionals.length === 0) {
+      io.stdout(HELP);
+      return EXIT_OK;
+    }
     await dispatch({ client, format, io }, argv);
     return EXIT_OK;
   } catch (error) {

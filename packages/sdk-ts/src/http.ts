@@ -23,6 +23,16 @@ export interface RequestOptions {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Parse Retry-After as delay-seconds or HTTP-date; undefined when absent/malformed. */
+const parseRetryAfterMs = (header: string | null): number | undefined => {
+  if (header === null || header.trim() === "") return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  return undefined;
+};
+
 export class HttpClient {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -58,11 +68,8 @@ export class HttpClient {
     for (;;) {
       const response = await this.fetchImpl(url, init);
       if (response.status === 429 && attempt < this.maxRetries) {
-        const retryAfter = Number(response.headers.get("Retry-After"));
-        const backoffMs = Number.isFinite(retryAfter)
-          ? retryAfter * 1000
-          : 2 ** attempt * 500;
-        await sleep(backoffMs);
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+        await sleep(retryAfterMs ?? 2 ** attempt * 500);
         attempt += 1;
         continue;
       }

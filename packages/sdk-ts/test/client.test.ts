@@ -223,6 +223,68 @@ describe("WzrdMailClient", () => {
     expect((err as WzrdmailError).status).toBe(500);
   });
 
+  it("maps camelCase clientId to the client_id wire field", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: inbox }]);
+    const c = client(fetch);
+    await c.inboxes.create({ clientId: "cid-camel" });
+    await c.inboxes.messages.send("scout@wzrd.tech", {
+      to: ["a@example.com"],
+      subject: "s",
+      clientId: "cid-msg"
+    });
+    expect(calls[0]?.body).toEqual({ client_id: "cid-camel" });
+    expect(calls[1]?.body).toEqual({
+      to: ["a@example.com"],
+      subject: "s",
+      client_id: "cid-msg"
+    });
+  });
+
+  it("prefers explicit client_id over the clientId alias", async () => {
+    const { fetch, calls } = mockFetch([{ status: 200, body: inbox }]);
+    await client(fetch).inboxes.create({ client_id: "snake", clientId: "camel" });
+    expect(calls[0]?.body).toEqual({ client_id: "snake" });
+  });
+
+  it("retries a 429 with an HTTP-date Retry-After", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-31T00:00:00Z"));
+    try {
+      const { fetch, calls } = mockFetch([
+        {
+          status: 429,
+          body: { name: "rate_limited", message: "slow down" },
+          headers: { "Retry-After": new Date("2026-08-31T00:00:02Z").toUTCString() }
+        },
+        { status: 200, body: { inboxes: [] } }
+      ]);
+      const promise = client(fetch).inboxes.list();
+      await vi.advanceTimersByTimeAsync(2000);
+      await promise;
+      expect(calls.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to expo backoff when Retry-After is missing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fetch, calls } = mockFetch([
+        { status: 429, body: { name: "rate_limited", message: "slow down" } },
+        { status: 200, body: { inboxes: [] } }
+      ]);
+      const promise = client(fetch).inboxes.list();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(calls.length).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+      expect(calls.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries 429 honoring Retry-After, then succeeds", async () => {
     vi.useFakeTimers();
     try {

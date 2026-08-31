@@ -1,4 +1,8 @@
-export { WzrdMailClient, type WzrdMailClientOptions } from "./client.js";
+export {
+  WzrdMailClient,
+  type WithClientIdAlias,
+  type WzrdMailClientOptions
+} from "./client.js";
 export { WzrdmailError } from "./error.js";
 export { DEFAULT_BASE_URL, type FetchLike } from "./http.js";
 export type {

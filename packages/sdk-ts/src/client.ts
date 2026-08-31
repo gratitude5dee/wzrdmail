@@ -23,17 +23,33 @@ import type {
 
 export type WzrdMailClientOptions = HttpClientOptions;
 
+/** AgentMail's SDK accepts camelCase `clientId` (goal.md §11); the wire field is `client_id`. */
+export type WithClientIdAlias<T> = T & { clientId?: string };
+
+function mapClientId<T extends { client_id?: string }>(
+  input: WithClientIdAlias<T>
+): T {
+  const { clientId, ...rest } = input;
+  if (clientId !== undefined && rest.client_id === undefined) {
+    return { ...rest, client_id: clientId } as T;
+  }
+  return rest as T;
+}
+
 type SignUpInput = z.infer<typeof AgentSignUpInput>;
 type VerifyInput = z.infer<typeof AgentVerifyInput>;
 
 class MessagesResource {
   constructor(private readonly http: HttpClient) {}
 
-  send(inboxId: string, input: SendMessageInput): Promise<Message> {
+  send(
+    inboxId: string,
+    input: WithClientIdAlias<SendMessageInput>
+  ): Promise<Message> {
     return this.http.request({
       method: "POST",
       path: `/v0/inboxes/${encodePath(inboxId)}/messages/send`,
-      body: input
+      body: mapClientId(input)
     });
   }
 
@@ -87,11 +103,11 @@ class InboxesResource {
     this.threads = new InboxThreadsResource(http);
   }
 
-  create(input: CreateInboxInput = {}): Promise<Inbox> {
+  create(input: WithClientIdAlias<CreateInboxInput> = {}): Promise<Inbox> {
     return this.http.request({
       method: "POST",
       path: "/v0/inboxes",
-      body: input
+      body: mapClientId(input)
     });
   }
 
@@ -114,11 +130,11 @@ class InboxesResource {
 class WebhooksResource {
   constructor(private readonly http: HttpClient) {}
 
-  create(input: CreateWebhookInput): Promise<Webhook> {
+  create(input: WithClientIdAlias<CreateWebhookInput>): Promise<Webhook> {
     return this.http.request({
       method: "POST",
       path: "/v0/webhooks",
-      body: input
+      body: mapClientId(input)
     });
   }
 
@@ -162,11 +178,11 @@ class AgentResource {
 class DomainsResource {
   constructor(private readonly http: HttpClient) {}
 
-  create(input: CreateDomainInput): Promise<Domain> {
+  create(input: WithClientIdAlias<CreateDomainInput>): Promise<Domain> {
     return this.http.request({
       method: "POST",
       path: "/v0/domains",
-      body: input
+      body: mapClientId(input)
     });
   }
 
