@@ -1,6 +1,9 @@
+import type { D1Migration } from "@cloudflare/vitest-pool-workers/config";
 import type { Env } from "../src/env.js";
 
 declare module "cloudflare:test" {
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  interface ProvidedEnv extends Env {}
+  interface ProvidedEnv extends Env {
+    TEST_MIGRATIONS: D1Migration[];
+    TEST_FIXTURES: Record<string, string>;
+  }
 }

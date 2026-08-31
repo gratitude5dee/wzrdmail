@@ -50,7 +50,8 @@
       ],
       "kv_namespaces": [
         { "binding": "CACHE", "id": "b9e4aea7ad8140fe93c21bca3f8abe6c" }
-      ]
+      ],
+      "send_email": [{ "name": "EMAIL" }]
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset" },
@@ -69,7 +70,8 @@
       ],
       "kv_namespaces": [
         { "binding": "CACHE", "id": "c8d597cd11a14c2284a65fdb4316034f" }
-      ]
+      ],
+      "send_email": [{ "name": "EMAIL" }]
     }
   }
 }

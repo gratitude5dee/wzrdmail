@@ -1,0 +1,56 @@
+import { ApiError } from "@wzrdmail/core";
+import type { Context } from "hono";
+import type { Env } from "./env.js";
+
+export interface AuthedKey {
+  key_id: string;
+  org_id: string;
+  pod_id: string | null;
+  permissions: string;
+  org_verified: boolean;
+  human_email: string;
+}
+
+export async function hashApiKey(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Resolve `Authorization: Bearer wm_…` or `x-api-key: wm_…` (§7). */
+export async function authenticate(
+  c: Context<{ Bindings: Env }>
+): Promise<AuthedKey> {
+  const header = c.req.header("authorization");
+  const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
+  const key = bearer ?? c.req.header("x-api-key") ?? null;
+  if (!key || !key.startsWith("wm_")) {
+    throw new ApiError("unauthorized", "missing or malformed API key");
+  }
+  const keyHash = await hashApiKey(key);
+  const row = await c.env.DB.prepare(
+    `SELECT k.key_id, k.org_id, k.pod_id, k.permissions, o.verified AS org_verified, o.human_email
+     FROM api_keys k JOIN organizations o ON o.org_id = k.org_id
+     WHERE k.key_hash = ? AND k.revoked_at IS NULL`
+  )
+    .bind(keyHash)
+    .first<{
+      key_id: string;
+      org_id: string;
+      pod_id: string | null;
+      permissions: string;
+      org_verified: number;
+      human_email: string;
+    }>();
+  if (!row) throw new ApiError("unauthorized", "invalid API key");
+  await c.env.DB.prepare("UPDATE api_keys SET last_used_at = ? WHERE key_id = ?")
+    .bind(new Date().toISOString(), row.key_id)
+    .run();
+  return {
+    key_id: row.key_id,
+    org_id: row.org_id,
+    pod_id: row.pod_id,
+    permissions: row.permissions,
+    org_verified: row.org_verified === 1,
+    human_email: row.human_email
+  };
+}

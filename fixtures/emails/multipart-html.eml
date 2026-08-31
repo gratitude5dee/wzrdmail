@@ -1,0 +1,17 @@
+From: Bob <bob@example.com>
+To: scout@wzrd.tech
+Subject: Design review
+Message-ID: <html-1@example.com>
+Date: Mon, 31 Aug 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+Looks good. Ship it.
+--b1
+Content-Type: text/html; charset=utf-8
+
+<div dir="ltr">Looks good. Ship it.<br><div class="gmail_quote"><blockquote>Earlier design attached.</blockquote></div></div>
+--b1--

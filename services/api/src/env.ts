@@ -4,4 +4,6 @@ export interface Env {
   DB: D1Database;
   MAIL: R2Bucket;
   CACHE: KVNamespace;
+  /** Cloudflare send_email binding (absent in local dev/tests). */
+  EMAIL?: SendEmail;
 }
