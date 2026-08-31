@@ -11,10 +11,19 @@ export interface AuthedKey {
   human_email: string;
 }
 
-/** Permission sets are comma-separated (`read`, `send`, `admin`); admin implies all. */
-export function requirePermission(auth: AuthedKey, needed: "read" | "send" | "admin"): void {
+/**
+ * Permission sets are comma-separated (`read`, `send`, `drafts`, `admin`);
+ * admin implies all. `drafts` allows creating/editing drafts without the
+ * ability to send them (`send` also implies `drafts`), so sandboxed agents
+ * can prepare mail for human review.
+ */
+export function requirePermission(
+  auth: AuthedKey,
+  needed: "read" | "send" | "drafts" | "admin"
+): void {
   const granted = auth.permissions.split(",").map((p) => p.trim().toLowerCase());
   if (granted.includes("admin") || granted.includes(needed)) return;
+  if (needed === "drafts" && granted.includes("send")) return;
   throw new ApiError("forbidden", `API key lacks the '${needed}' permission`);
 }
 

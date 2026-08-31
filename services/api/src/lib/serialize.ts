@@ -20,6 +20,8 @@ export interface MessageRow {
   labels: string;
   rfc822_message_id: string | null;
   in_reply_to: string | null;
+  send_at: string | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +45,7 @@ export interface ThreadRow {
   participants: string;
   labels: string;
   message_count: number;
+  deleted_at: string | null;
   last_message_at: string;
   created_at: string;
   updated_at: string;
@@ -102,6 +105,8 @@ export function messageJson(
     })),
     in_reply_to: row.in_reply_to,
     rfc822_message_id: row.rfc822_message_id,
+    send_at: row.send_at,
+    deleted_at: row.deleted_at,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
@@ -118,7 +123,65 @@ export function threadJson(row: ThreadRow): Record<string, unknown> {
     participants: jsonArray(row.participants),
     labels: jsonArray(row.labels),
     message_count: row.message_count,
+    deleted_at: row.deleted_at,
     last_message_at: row.last_message_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+export interface DraftRow {
+  draft_id: string;
+  org_id: string;
+  pod_id: string;
+  inbox_id: string;
+  thread_id: string | null;
+  in_reply_to: string | null;
+  to_addrs: string;
+  cc_addrs: string;
+  bcc_addrs: string;
+  subject: string;
+  text: string | null;
+  html: string | null;
+  reply_to: string | null;
+  headers: string;
+  labels: string;
+  client_id: string | null;
+  sent_msg_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function jsonRecord(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function draftJson(row: DraftRow): Record<string, unknown> {
+  return {
+    draft_id: row.draft_id,
+    inbox_id: row.inbox_id,
+    organization_id: row.org_id,
+    pod_id: row.pod_id,
+    thread_id: row.thread_id,
+    to: jsonArray(row.to_addrs),
+    cc: jsonArray(row.cc_addrs),
+    bcc: jsonArray(row.bcc_addrs),
+    subject: row.subject,
+    text: row.text,
+    html: row.html,
+    reply_to: row.reply_to,
+    headers: jsonRecord(row.headers),
+    labels: jsonArray(row.labels),
+    in_reply_to: row.in_reply_to,
+    client_id: row.client_id,
+    sent_message_id: row.sent_msg_id,
     created_at: row.created_at,
     updated_at: row.updated_at
   };

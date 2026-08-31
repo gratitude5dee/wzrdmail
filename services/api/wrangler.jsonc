@@ -10,6 +10,9 @@
     "WZRDMAIL_ENV": "dev",
     "BUILD_SHA": "dev"
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -51,6 +54,7 @@
       "kv_namespaces": [
         { "binding": "CACHE", "id": "b9e4aea7ad8140fe93c21bca3f8abe6c" }
       ],
+      "triggers": { "crons": ["* * * * *"] },
       "send_email": [{ "name": "EMAIL" }]
     },
     "production": {
@@ -71,6 +75,7 @@
       "kv_namespaces": [
         { "binding": "CACHE", "id": "c8d597cd11a14c2284a65fdb4316034f" }
       ],
+      "triggers": { "crons": ["* * * * *"] },
       "send_email": [{ "name": "EMAIL" }]
     }
   }

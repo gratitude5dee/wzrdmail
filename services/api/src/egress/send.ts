@@ -23,8 +23,9 @@ export interface SendContext {
 export interface SentMessage {
   message_id: string;
   thread_id: string;
-  state: "sent" | "rejected";
+  state: "sent" | "rejected" | "scheduled";
   rfc822_message_id: string;
+  send_at?: string;
   rejected_recipients?: { address: string; error: string }[];
 }
 
@@ -184,6 +185,7 @@ async function doSend(
   const rfc822MessageId = `<${msgId}@${domain}>`;
   const now = new Date().toISOString();
   const subject = input.subject ?? "";
+  const sendAt = input.send_at && new Date(input.send_at).getTime() > Date.now() ? input.send_at : null;
 
   // Build MIME
   const mime = createMimeMessage();
@@ -300,15 +302,16 @@ async function doSend(
       `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state,
          from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html,
          extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, client_id,
-         raw_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'outbound', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         raw_key, send_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msgId, ctx.org_id, ctx.pod_id, ctx.inbox_id, threadId,
+      sendAt ? "scheduled" : "queued",
       ctx.inbox_id, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc),
       subject, input.text ?? null, input.html ?? null,
       input.text ?? null, input.html ?? null,
       JSON.stringify(input.labels ?? []), rfc822MessageId,
-      refIds[0] ?? null, input.client_id ?? null, rawR2Key, now, now
+      refIds[0] ?? null, input.client_id ?? null, rawR2Key, sendAt, now, now
     )
   );
   statements.push(
@@ -318,6 +321,24 @@ async function doSend(
     ).bind(ctx.inbox_id, rfc822MessageId, threadId, msgId)
   );
   await env.DB.batch(statements);
+
+  if (sendAt) {
+    const scheduled: SentMessage = {
+      message_id: msgId,
+      thread_id: threadId,
+      state: "scheduled",
+      rfc822_message_id: rfc822MessageId,
+      send_at: sendAt
+    };
+    if (reservation) {
+      await env.DB.prepare(
+        "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND owner = ?"
+      )
+        .bind(JSON.stringify(scheduled), ctx.org_id, reservation.clientId, reservation.owner)
+        .run();
+    }
+    return scheduled;
+  }
 
   if (reservation) {
     // Renew the lease and verify ownership immediately before the provider

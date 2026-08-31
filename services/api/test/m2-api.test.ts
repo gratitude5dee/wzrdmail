@@ -518,8 +518,11 @@ describe("thread endpoints (§M2)", () => {
       env
     );
     expect(deleted.status).toBe(204);
-    const gone = await app.request(`${base}/${msg.thread_id}`, authed(key), env);
-    expect(gone.status).toBe(404);
+    // Delete is a soft delete: the thread leaves the default list but stays
+    // fetchable (trash) until purged.
+    const afterDelete = await app.request(base, authed(key), env);
+    const afterBody = (await afterDelete.json()) as { threads: { thread_id: string }[] };
+    expect(afterBody.threads.map((t) => t.thread_id)).not.toContain(msg.thread_id);
   });
 
   it("hides foreign threads from org-wide routes", async () => {

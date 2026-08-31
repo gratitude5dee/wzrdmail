@@ -20,6 +20,7 @@ export const MessageDirection = z.enum(["inbound", "outbound"]);
 export const MessageState = z.enum([
   "received",
   "queued",
+  "scheduled",
   "sent",
   "delivered",
   "bounced",
@@ -58,6 +59,8 @@ export const Message = z.object({
   attachments: z.array(Attachment).default([]),
   in_reply_to: z.string().nullable().optional(),
   rfc822_message_id: z.string().nullable().optional(),
+  send_at: IsoTimestamp.nullable().optional(),
+  deleted_at: IsoTimestamp.nullable().optional(),
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp
 });
@@ -73,6 +76,7 @@ export const Thread = z.object({
   participants: z.array(z.string()).default([]),
   labels: z.array(z.string()).default([]),
   message_count: z.number().int().nonnegative(),
+  deleted_at: IsoTimestamp.nullable().optional(),
   last_message_at: IsoTimestamp,
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp
@@ -109,7 +113,8 @@ export const SendMessageInput = z.object({
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
-  client_id: z.string().max(256).optional()
+  client_id: z.string().max(256).optional(),
+  send_at: IsoTimestamp.optional()
 });
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
 
@@ -140,7 +145,8 @@ export const ReplyMessageInput = z.object({
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
-  client_id: z.string().max(256).optional()
+  client_id: z.string().max(256).optional(),
+  send_at: IsoTimestamp.optional()
 });
 export type ReplyMessageInput = z.infer<typeof ReplyMessageInput>;
 
@@ -168,6 +174,63 @@ export const UpdateThreadInput = z.object({
   remove_labels: z.array(z.string()).optional()
 });
 export type UpdateThreadInput = z.infer<typeof UpdateThreadInput>;
+
+export const Draft = z.object({
+  draft_id: z.string(),
+  inbox_id: InboxId,
+  organization_id: z.string(),
+  pod_id: z.string(),
+  to: z.array(z.string()).default([]),
+  cc: z.array(z.string()).default([]),
+  bcc: z.array(z.string()).default([]),
+  subject: z.string().default(""),
+  text: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
+  reply_to: z.string().nullable().optional(),
+  headers: z.record(z.string()).default({}),
+  labels: z.array(z.string()).default([]),
+  in_reply_to: z.string().nullable().optional(),
+  client_id: z.string().nullable().optional(),
+  sent_message_id: z.string().nullable().optional(),
+  created_at: IsoTimestamp,
+  updated_at: IsoTimestamp
+});
+export type Draft = z.infer<typeof Draft>;
+
+export const CreateDraftInput = z.object({
+  to: z.array(z.string().email()).optional(),
+  cc: z.array(z.string().email()).optional(),
+  bcc: z.array(z.string().email()).optional(),
+  subject: z.string().max(998).optional(),
+  text: z.string().optional(),
+  html: z.string().optional(),
+  reply_to: z.string().email().optional(),
+  headers: z.record(z.string()).optional(),
+  labels: z.array(z.string()).optional(),
+  in_reply_to: z.string().optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreateDraftInput = z.infer<typeof CreateDraftInput>;
+
+export const UpdateDraftInput = z.object({
+  to: z.array(z.string().email()).optional(),
+  cc: z.array(z.string().email()).optional(),
+  bcc: z.array(z.string().email()).optional(),
+  subject: z.string().max(998).optional(),
+  text: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
+  reply_to: z.string().email().nullable().optional(),
+  headers: z.record(z.string()).optional(),
+  labels: z.array(z.string()).optional(),
+  in_reply_to: z.string().nullable().optional()
+});
+export type UpdateDraftInput = z.infer<typeof UpdateDraftInput>;
+
+export const SendDraftInput = z.object({
+  send_at: IsoTimestamp.optional(),
+  client_id: z.string().max(256).optional()
+});
+export type SendDraftInput = z.infer<typeof SendDraftInput>;
 
 export const BatchGetMessagesInput = z.object({
   message_ids: z.array(z.string()).min(1).max(100)
