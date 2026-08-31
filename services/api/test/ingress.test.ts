@@ -97,6 +97,90 @@ describe("inbound pipeline (§6.1)", () => {
     expect(original.thread_id).toBe(reply.thread_id);
   });
 
+  it("treats redelivery of the same Message-ID as a duplicate, not a new row", async () => {
+    await seedInbox();
+    const first = await ingest("simple.eml");
+    expect(first.kind).toBe("stored");
+    if (first.kind !== "stored") return;
+    const again = await ingest("simple.eml");
+    expect(again.kind).toBe("duplicate");
+    if (again.kind !== "duplicate") return;
+    expect(again.msg_id).toBe(first.msg_id);
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE rfc822_message_id = '<orig-1@example.com>'"
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(1);
+    const thread = await env.DB.prepare("SELECT message_count FROM threads WHERE thread_id = ?")
+      .bind(first.thread_id)
+      .first<{ message_count: number }>();
+    expect(thread?.message_count).toBe(1);
+  });
+
+  it("does not merge unrelated senders' threads that share a subject", async () => {
+    await seedInbox();
+    const first = await ingestEmail(env, {
+      raw: fixtureBuffer(env.TEST_FIXTURES, "simple.eml"),
+      rawKey: "raw/test/a.eml",
+      envelopeFrom: "ada@example.com",
+      envelopeTo: "scout@wzrd.tech"
+    });
+    expect(first.kind).toBe("stored");
+    if (first.kind !== "stored") return;
+    // Same subject, different sender, no references.
+    const otherRaw = new TextEncoder().encode(
+      [
+        "From: mallory@elsewhere.com",
+        "To: scout@wzrd.tech",
+        "Subject: Quarterly numbers",
+        "Message-ID: <other-1@elsewhere.com>",
+        "Content-Type: text/plain",
+        "",
+        "unrelated conversation"
+      ].join("\r\n")
+    ).buffer as ArrayBuffer;
+    const other = await ingestEmail(env, {
+      raw: otherRaw,
+      rawKey: "raw/test/b.eml",
+      envelopeFrom: "mallory@elsewhere.com",
+      envelopeTo: "scout@wzrd.tech"
+    });
+    expect(other.kind).toBe("stored");
+    if (other.kind !== "stored") return;
+    expect(other.thread_id).not.toBe(first.thread_id);
+  });
+
+  it("truncates oversized bodies and sets body_truncated", async () => {
+    await seedInbox();
+    const bigBody = "x".repeat(70 * 1024);
+    const raw = new TextEncoder().encode(
+      [
+        "From: ada@example.com",
+        "To: scout@wzrd.tech",
+        "Subject: big one",
+        "Message-ID: <big-1@example.com>",
+        "Content-Type: text/plain",
+        "",
+        bigBody
+      ].join("\r\n")
+    ).buffer as ArrayBuffer;
+    const result = await ingestEmail(env, {
+      raw,
+      rawKey: "raw/test/big.eml",
+      envelopeFrom: "ada@example.com",
+      envelopeTo: "scout@wzrd.tech"
+    });
+    expect(result.kind).toBe("stored");
+    if (result.kind !== "stored") return;
+    const msg = await env.DB.prepare(
+      "SELECT text, body_truncated, raw_key FROM messages WHERE msg_id = ?"
+    )
+      .bind(result.msg_id)
+      .first<{ text: string; body_truncated: number; raw_key: string }>();
+    expect(msg?.body_truncated).toBe(1);
+    expect(msg?.text.length).toBe(64 * 1024);
+    expect(msg?.raw_key).toBe("raw/test/big.eml");
+  });
+
   it("extracts html and extracted_html from multipart messages", async () => {
     await seedInbox();
     const result = await ingest("multipart-html.eml");

@@ -1,6 +1,6 @@
 import { ApiError, SendMessageInput } from "@wzrdmail/core";
 import { Hono } from "hono";
-import { authenticate } from "../auth.js";
+import { authenticate, requirePermission } from "../auth.js";
 import { CloudflareEmailProvider } from "../egress/provider.js";
 import { sendMessage, type SendContext } from "../egress/send.js";
 import type { Env } from "../env.js";
@@ -9,6 +9,7 @@ export const messages = new Hono<{ Bindings: Env }>();
 
 messages.post("/inboxes/:inbox_id/messages/send", async (c) => {
   const auth = await authenticate(c);
+  requirePermission(auth, "send");
   const inboxId = decodeURIComponent(c.req.param("inbox_id")).toLowerCase();
   const inbox = await c.env.DB.prepare(
     "SELECT inbox_id, org_id, pod_id FROM inboxes WHERE inbox_id = ? AND deleted_at IS NULL"

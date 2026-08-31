@@ -29,8 +29,15 @@ export interface DomainVerification {
   pending: DnsRecord[];
 }
 
+export interface SendOutcome {
+  providerMessageId: string;
+  accepted: string[];
+  rejected: { address: string; error: string }[];
+}
+
 export interface MailProvider {
-  send(msg: OutboundMime): Promise<{ providerMessageId: string }>;
+  /** Per-recipient outcomes: a partial failure must not erase acceptances. */
+  send(msg: OutboundMime): Promise<SendOutcome>;
   verifyDomain(domain: DomainRecord): Promise<DomainVerification>;
   requiredDnsRecords(domain: DomainRecord): DnsRecord[];
 }

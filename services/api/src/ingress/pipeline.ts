@@ -22,7 +22,20 @@ export interface IngestInput {
 export type IngestResult =
   | { kind: "unrouted" }
   | { kind: "dsn"; event: "message.bounced" | "message.complained" }
+  | { kind: "duplicate"; msg_id: string; thread_id: string }
   | { kind: "stored"; msg_id: string; thread_id: string };
+
+/** D1 row width discipline (§4): bodies over 64 KB live only in R2. */
+const MAX_BODY_BYTES = 64 * 1024;
+/** Guard against crafted MIME with pathological part counts. */
+const MAX_ATTACHMENTS = 100;
+
+function truncateBody(value: string | null): { value: string | null; truncated: boolean } {
+  if (value === null || value.length <= MAX_BODY_BYTES) {
+    return { value, truncated: false };
+  }
+  return { value: value.slice(0, MAX_BODY_BYTES), truncated: true };
+}
 
 interface InboxRow {
   inbox_id: string;
@@ -118,17 +131,37 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
   const dsn = detectDsn(email);
   if (dsn) return handleDsn(env, inbox, email, dsn);
 
+  // SMTP-level retries redeliver the same MIME; the RFC Message-ID makes
+  // redelivery a no-op instead of a duplicate row.
+  if (email.messageId) {
+    const existing = await env.DB.prepare(
+      "SELECT msg_id, thread_id FROM message_id_lookup WHERE inbox_id = ? AND rfc822_message_id = ?"
+    )
+      .bind(inbox.inbox_id, email.messageId)
+      .first<{ msg_id: string; thread_id: string }>();
+    if (existing) {
+      return { kind: "duplicate", msg_id: existing.msg_id, thread_id: existing.thread_id };
+    }
+  }
+
   const now = new Date().toISOString();
   const msgId = newId("msg");
   const subject = email.subject ?? "";
-  const text = email.text ?? null;
-  const html = email.html ?? null;
+  const textBody = truncateBody(email.text ?? null);
+  const htmlBody = truncateBody(email.html ?? null);
+  const text = textBody.value;
+  const html = htmlBody.value;
   const extractedText = text ? extractReplyText(text) : null;
   const extractedHtml = html ? extractReplyHtml(html) : null;
+  const bodyTruncated = textBody.truncated || htmlBody.truncated;
   const fromAddr = email.from?.address?.toLowerCase() ?? input.envelopeFrom.toLowerCase();
   const toAddrs = addressList(email.to);
   const ccAddrs = addressList(email.cc);
   const participants = [...new Set([fromAddr, ...toAddrs, ...ccAddrs])];
+  // The inbox's own address appears on every thread; including it in overlap
+  // scoring would merge unrelated conversations that share a subject.
+  const inboxAddr = inbox.inbox_id.toLowerCase();
+  const overlapParticipants = participants.filter((p) => p !== inboxAddr);
 
   // Threading (§6.5): Message-ID references first, subject+participants fallback.
   const refIds = [
@@ -172,7 +205,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
   const resolution = resolveThread({
     referencedThreadId,
     subject,
-    participants,
+    participants: overlapParticipants,
     candidates
   });
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
@@ -180,7 +213,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
 
   // Attachments go to R2 before the D1 batch commits.
   const attachmentRows: { att_id: string; filename: string; content_type: string; size: number; content_id: string | null }[] = [];
-  for (const att of email.attachments) {
+  for (const att of email.attachments.slice(0, MAX_ATTACHMENTS)) {
     const attId = newId("att");
     const content =
       typeof att.content === "string" ? new TextEncoder().encode(att.content) : att.content;
@@ -234,9 +267,9 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     env.DB.prepare(
       `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state,
          from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html,
-         extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         extracted_text, extracted_html, body_truncated, labels, rfc822_message_id, in_reply_to,
+         raw_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msgId,
       inbox.org_id,
@@ -251,9 +284,11 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
       html,
       extractedText,
       extractedHtml,
+      bodyTruncated ? 1 : 0,
       JSON.stringify(["unread"]),
       email.messageId ?? null,
       email.inReplyTo ?? null,
+      input.rawKey,
       now,
       now
     )

@@ -11,6 +11,13 @@ export interface AuthedKey {
   human_email: string;
 }
 
+/** Permission sets are comma-separated (`read`, `send`, `admin`); admin implies all. */
+export function requirePermission(auth: AuthedKey, needed: "read" | "send" | "admin"): void {
+  const granted = auth.permissions.split(",").map((p) => p.trim().toLowerCase());
+  if (granted.includes("admin") || granted.includes(needed)) return;
+  throw new ApiError("forbidden", `API key lacks the '${needed}' permission`);
+}
+
 export async function hashApiKey(key: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
