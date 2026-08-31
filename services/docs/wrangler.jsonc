@@ -1,4 +1,5 @@
-// wzrdmail docs Worker → docs.wzrd.tech (§14 of goal.md).
+// wzrdmail docs Worker → mail.wzrd.tech/docs (§14 of goal.md), reached
+// through the landing Worker's DOCS service binding; not publicly routed.
 // Static markdown corpus rendered per-request; no storage bindings needed.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -11,16 +12,12 @@
   },
   "env": {
     "staging": {
-      "vars": { "WZRDMAIL_ENV": "staging" },
-      "workers_dev": true,
-      "routes": [
-        { "pattern": "staging.docs.wzrd.tech", "custom_domain": true }
-      ]
+      "vars": { "WZRDMAIL_ENV": "staging", "DOCS_BASE_PATH": "/docs" },
+      "workers_dev": true
     },
     "production": {
-      "vars": { "WZRDMAIL_ENV": "prod" },
-      "workers_dev": true,
-      "routes": [{ "pattern": "docs.wzrd.tech", "custom_domain": true }]
+      "vars": { "WZRDMAIL_ENV": "prod", "DOCS_BASE_PATH": "/docs" },
+      "workers_dev": true
     }
   }
 }

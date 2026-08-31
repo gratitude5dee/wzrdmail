@@ -11,6 +11,15 @@ function wantsMarkdown(c: Context<{ Bindings: Env }>): boolean {
   return accepts(c.req.header("Accept") ?? "", "text/markdown");
 }
 
+/**
+ * The docs are mounted under a path prefix (`/docs` on mail.wzrd.tech), so
+ * every generated link is written relative to it. `index.ts` strips the
+ * prefix from the request before routing.
+ */
+export function basePath(env: Env): string {
+  return (env.DOCS_BASE_PATH ?? "").replace(/\/+$/, "");
+}
+
 function servePage(
   c: Context<{ Bindings: Env }>,
   page: DocPage,
@@ -22,7 +31,13 @@ function servePage(
     });
   }
   return c.html(
-    pageHtml(page.title, page.description, renderMarkdown(page.markdown), page.slug)
+    pageHtml(
+      page.title,
+      page.description,
+      renderMarkdown(page.markdown),
+      page.slug,
+      basePath(c.env)
+    )
   );
 }
 
@@ -50,7 +65,8 @@ export function createApp(): Hono<{ Bindings: Env }> {
         "wzrdmail docs",
         "Email for AI agents — docs for the wzrd.tech API, MCP, CLI, and SDKs.",
         renderMarkdown(INDEX_MARKDOWN),
-        ""
+        "",
+        basePath(c.env)
       )
     );
   });

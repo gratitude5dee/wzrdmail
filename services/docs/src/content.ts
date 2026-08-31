@@ -68,7 +68,7 @@ curl https://api.wzrd.tech/v0/inboxes/scout@wzrd.tech/threads \\
 Any MCP client gets the same power with one line:
 
 \`\`\`bash
-claude mcp add --transport http wzrdmail https://mcp.wzrd.tech/mcp
+claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp
 \`\`\`
 
 ## 6. Or the CLI
@@ -485,12 +485,12 @@ export function llmsTxt(): string {
 ## Docs
 
 ${PAGES.map(
-    (p) => `- [${p.title}](https://docs.wzrd.tech/${p.slug}.md): ${p.description}`
+    (p) => `- [${p.title}](https://mail.wzrd.tech/docs/${p.slug}.md): ${p.description}`
   ).join("\n")}
 
 ## Optional
 
-- [Full corpus](https://docs.wzrd.tech/llms-full.txt): every docs page as one markdown file
+- [Full corpus](https://mail.wzrd.tech/docs/llms-full.txt): every docs page as one markdown file
 `;
 }
 

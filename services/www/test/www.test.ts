@@ -17,7 +17,7 @@ describe("landing page", () => {
     const body = await res.text();
     expect(body).toContain("Email for AI agents");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
-    expect(body).toContain("https://docs.wzrd.tech");
+    expect(body).toContain(`href="/docs"`);
     expect(body).toContain("https://console.wzrd.tech");
   });
 
@@ -77,6 +77,20 @@ describe("landing page", () => {
     expect(res.headers.get("Content-Type")).toContain("text/html");
   });
 
+  it("forwards /docs to the bound docs Worker", async () => {
+    const seen: string[] = [];
+    const docs: Fetcher = {
+      fetch: (input: RequestInfo | URL) => {
+        seen.push(new Request(input).url);
+        return Promise.resolve(new Response("docs page"));
+      }
+    } as Fetcher;
+    const res = await app.request("/docs/quickstart", {}, { ...env, DOCS: docs });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("docs page");
+    expect(seen[0]).toContain("/docs/quickstart");
+  });
+
   it("returns the error envelope on unknown routes", async () => {
     const res = await app.request("/nope", {}, env);
     expect(res.status).toBe(404);
@@ -96,7 +110,7 @@ describe("GET /llms.txt", () => {
     expect(body).toContain("If you are an AI agent");
     expect(body).toContain("WZRDMAIL_API_KEY");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
-    expect(body).toContain("https://mcp.wzrd.tech/mcp");
+    expect(body).toContain("https://mcp.mail.wzrd.tech/mcp");
     expect(body).toContain("wm_live_");
   });
 });

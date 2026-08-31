@@ -11,14 +11,14 @@ interface NavGroup {
   items: { slug: string; title: string; href: string }[];
 }
 
-function navGroups(): NavGroup[] {
+function navGroups(basePath: string): NavGroup[] {
   const getStarted: NavGroup = { label: "Get Started", items: [] };
   const apiRef: NavGroup = { label: "API Reference", items: [] };
   for (const page of PAGES) {
     const item = {
       slug: page.slug,
       title: page.title.replace(/^API Reference:\s*/, ""),
-      href: `/${page.slug}`
+      href: `${basePath}/${page.slug}`
     };
     if (page.slug.startsWith("api/")) {
       apiRef.items.push(item);
@@ -29,8 +29,8 @@ function navGroups(): NavGroup[] {
   return [getStarted, apiRef];
 }
 
-function sidebarHtml(activeSlug: string): string {
-  return navGroups()
+function sidebarHtml(activeSlug: string, basePath: string): string {
+  return navGroups(basePath)
     .map(
       (group) => `<div class="navgroup">
 <h3 class="chrome-2">${group.label}</h3>
@@ -166,7 +166,8 @@ export function pageHtml(
   title: string,
   description: string,
   body: string,
-  activeSlug: string
+  activeSlug: string,
+  basePath: string
 ): string {
   return `<!doctype html>
 <html lang="en">
@@ -175,21 +176,21 @@ export function pageHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} · wzrdmail docs</title>
 <meta name="description" content="${description}">
-<link rel="llms-txt" href="/llms.txt">
+<link rel="llms-txt" href="${basePath}/llms.txt">
 <style>${STYLE}</style>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/">wzrdmail <span class="tag chrome">docs</span></a>
+  <a class="brand" href="${basePath}/">wzrdmail <span class="tag chrome">docs</span></a>
   <nav>
-    <a href="https://wzrd.tech">wzrd.tech</a>
+    <a href="https://mail.wzrd.tech">mail.wzrd.tech</a>
     <a href="https://console.wzrd.tech">Console</a>
-    <a href="/llms.txt">llms.txt</a>
+    <a href="${basePath}/llms.txt">llms.txt</a>
   </nav>
 </header>
 <div class="layout">
 <aside class="side">
-${sidebarHtml(activeSlug)}
+${sidebarHtml(activeSlug, basePath)}
 </aside>
 <main>
 ${body}
