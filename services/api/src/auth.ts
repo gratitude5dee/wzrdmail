@@ -23,7 +23,54 @@ export async function hashApiKey(key: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Resolve `Authorization: Bearer wm_…` or `x-api-key: wm_…` (§7). */
+export const SESSION_COOKIE = "wm_session";
+
+/** Console session cookie → org-admin principal (goal-console.md §1). */
+async function authenticateSession(
+  c: Context<{ Bindings: Env }>,
+  token: string
+): Promise<AuthedKey | null> {
+  const tokenHash = await hashApiKey(token);
+  const row = await c.env.DB.prepare(
+    `SELECT s.session_id, s.org_id, s.expires_at, o.verified AS org_verified, o.human_email
+     FROM sessions s JOIN organizations o ON o.org_id = s.org_id
+     WHERE s.token_hash = ?`
+  )
+    .bind(tokenHash)
+    .first<{
+      session_id: string;
+      org_id: string;
+      expires_at: string;
+      org_verified: number;
+      human_email: string;
+    }>();
+  if (!row) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    await c.env.DB.prepare("DELETE FROM sessions WHERE session_id = ?").bind(row.session_id).run();
+    return null;
+  }
+  return {
+    key_id: row.session_id,
+    org_id: row.org_id,
+    pod_id: null,
+    permissions: "admin",
+    org_verified: row.org_verified === 1,
+    human_email: row.human_email
+  };
+}
+
+function readCookie(c: Context<{ Bindings: Env }>, name: string): string | null {
+  const header = c.req.header("cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+/** Resolve `Authorization: Bearer wm_…`, `x-api-key: wm_…` (§7), or a console session cookie. */
 export async function authenticate(
   c: Context<{ Bindings: Env }>
 ): Promise<AuthedKey> {
@@ -31,6 +78,11 @@ export async function authenticate(
   const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
   const key = bearer ?? c.req.header("x-api-key") ?? null;
   if (!key || !key.startsWith("wm_")) {
+    const cookie = readCookie(c, SESSION_COOKIE);
+    if (cookie) {
+      const session = await authenticateSession(c, cookie);
+      if (session) return session;
+    }
     throw new ApiError("unauthorized", "missing or malformed API key");
   }
   const keyHash = await hashApiKey(key);

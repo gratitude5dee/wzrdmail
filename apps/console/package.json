@@ -1,0 +1,30 @@
+{
+  "name": "@wzrdmail/console",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "echo 'no tests yet'",
+    "dev": "vite",
+    "deploy:staging": "vite build --mode staging && wrangler deploy --env staging",
+    "deploy:prod": "vite build && wrangler deploy --env production"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.19.0",
+    "vite": "^6.0.7",
+    "wrangler": "^3.100.0"
+  }
+}

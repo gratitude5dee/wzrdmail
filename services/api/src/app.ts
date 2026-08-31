@@ -1,21 +1,44 @@
 import { ApiError } from "@wzrdmail/core";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Env } from "./env.js";
 import { agent } from "./routes/agent.js";
+import { consoleAuth } from "./routes/console.js";
 import { health } from "./routes/health.js";
 import { inboxes } from "./routes/inboxes.js";
+import { keys } from "./routes/keys.js";
 import { messages } from "./routes/messages.js";
 import { threads } from "./routes/threads.js";
+import { usage } from "./routes/usage.js";
 import { webhooks } from "./routes/webhooks.js";
+
+const CONSOLE_ORIGINS = [
+  "https://console.mail.wzrd.tech",
+  "https://staging.console.mail.wzrd.tech",
+  "http://localhost:5173"
+];
 
 export function createApp(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
+  app.use(
+    "/v0/*",
+    cors({
+      origin: (origin) => (CONSOLE_ORIGINS.includes(origin) ? origin : null),
+      credentials: true,
+      allowHeaders: ["authorization", "content-type", "x-api-key"],
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"]
+    })
+  );
+
   app.route("/v0", health);
   app.route("/v0", agent);
+  app.route("/v0", consoleAuth);
   app.route("/v0", inboxes);
+  app.route("/v0", keys);
   app.route("/v0", messages);
   app.route("/v0", threads);
+  app.route("/v0", usage);
   app.route("/v0", webhooks);
 
   app.notFound((c) =>

@@ -29,6 +29,7 @@ export type IdPrefix =
   | "wh"
   | "whd"
   | "evt"
+  | "ses"
   | "draft";
 
 export function newId(prefix: IdPrefix): string {
