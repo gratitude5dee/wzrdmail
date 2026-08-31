@@ -116,6 +116,21 @@ export interface Webhook {
   created_at: string;
 }
 
+export interface WebhookDelivery {
+  delivery_id: string;
+  webhook_id: string;
+  event_id: string;
+  event_type: string;
+  attempt: number;
+  manual: boolean;
+  status: "pending" | "success" | "failed";
+  response_status: number | null;
+  error: string | null;
+  duration_ms: number | null;
+  next_retry_at: string | null;
+  created_at: string;
+}
+
 export interface ApiKey {
   key_id: string;
   name: string | null;
