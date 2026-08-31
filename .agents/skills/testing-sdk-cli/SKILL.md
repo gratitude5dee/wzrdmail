@@ -25,3 +25,11 @@ Write a small Node `http` server implementing goal.md §7 shapes:
 - Log every request (method/path/query/Authorization header/content-type/parsed body) to an in-memory array exposed at `GET /__log`, and add a `POST /__control` endpoint to prime behaviors (e.g. number of 429s to return) — this lets you assert header/body correctness and retry counts.
 - `/v0/agent/sign-up` is the only unauthenticated endpoint (SDK sends no Authorization header there).
 - SDK retries 429 up to 3 times honoring Retry-After seconds; verify via request count in `/__log` and elapsed wall time.
+- Spec response shapes (goal.md §0.1): sign-up → `{api_key, inbox_id, organization_id}`; verify → `{verified: true}`.
+
+## MCP server (services/mcp)
+- Local dev: the pinned wrangler ^3.100 FAILS to start (`No such module "cloudflare-internal:email"` — the `agents` package imports `cloudflare:email`, unsupported by wrangler 3's miniflare). Use `npx -y wrangler@4 dev --port 8788` from services/mcp instead (or bump the devDependency to wrangler 4).
+- `API_BASE_URL` dev var is http://localhost:8787 — run the mock §7 server there (`PORT=8787 node server.mjs`).
+- Endpoints: `/health` → `{ok:true}`; `/mcp` Streamable HTTP; auth via `x-api-key` header or `Authorization: Bearer` (missing key → HTTP 401 `{name,message}` envelope).
+- Drive it with a real client: node script importing `@modelcontextprotocol/sdk` `Client` + `StreamableHTTPClientTransport` (pass headers via `requestInit.headers`). The script file must live inside services/mcp (or otherwise resolve the sdk from its own path) — Node ESM resolves bare imports relative to the script file, not cwd.
+- Expect 22 tools (§9). API errors surface as tool results with `isError: true` and content JSON `{error:{name,message},status}` (not protocol errors). Tools proxy to API_BASE_URL with the caller's MCP key as `Authorization: Bearer`.
