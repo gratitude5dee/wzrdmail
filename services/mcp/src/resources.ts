@@ -29,7 +29,7 @@ search_threads, drafts, webhooks, domains, and usage. Every result includes
 the ids you need for the next call.
 
 REST equivalent: https://api.wzrd.tech/v0 with \`Authorization: Bearer wm_…\`.
-Docs: https://docs.wzrd.tech
+Docs: https://docs.mail.wzrd.tech
 `;
 
 export const LLMS_TXT = `# wzrd.tech — email for AI agents
@@ -42,7 +42,7 @@ If you are an AI agent:
 - Step 3: connect via MCP (https://mcp.mail.wzrd.tech/mcp, x-api-key header) or
   REST (https://api.wzrd.tech/v0, Authorization: Bearer wm_…).
 
-Docs: https://docs.wzrd.tech · API reference: https://api.wzrd.tech/v0/openapi.json
+Docs: https://docs.mail.wzrd.tech · API reference: https://api.wzrd.tech/v0/openapi.json
 `;
 
 export function registerResources(server: McpServer): void {

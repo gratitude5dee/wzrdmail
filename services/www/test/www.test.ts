@@ -17,7 +17,7 @@ describe("landing page", () => {
     const body = await res.text();
     expect(body).toContain("Email for AI agents");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
-    expect(body).toContain("https://docs.wzrd.tech");
+    expect(body).toContain("https://docs.mail.wzrd.tech");
     expect(body).toContain("https://console.wzrd.tech");
   });
 
