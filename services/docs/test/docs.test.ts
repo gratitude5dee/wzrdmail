@@ -32,6 +32,41 @@ describe("docs routes", () => {
   });
 });
 
+describe("content links under a mount prefix", () => {
+  const mounted = { ...env, DOCS_BASE_PATH: "/docs" };
+
+  it("prefixes embedded links in rendered HTML", async () => {
+    const res = await app.request("/", { headers: { Accept: "text/html" } }, mounted);
+    const body = await res.text();
+    expect(body).toContain(`href="/docs/quickstart"`);
+    expect(body).toContain(`href="/docs/llms.txt"`);
+    expect(body).not.toContain(`href="/quickstart"`);
+  });
+
+  it("prefixes embedded links in raw markdown responses", async () => {
+    const res = await app.request("/index.md", {}, mounted);
+    const body = await res.text();
+    expect(body).toContain("](/docs/llms.txt)");
+    expect(body).not.toContain("](/llms.txt)");
+  });
+
+  it("prefixes links in page markdown and llms-full.txt", async () => {
+    const page = await app.request(
+      "/quickstart",
+      { headers: { Accept: "text/markdown" } },
+      mounted
+    );
+    expect(await page.text()).not.toMatch(/\]\(\/(?!docs\/)/);
+    const full = await app.request("/llms-full.txt", {}, mounted);
+    expect(await full.text()).not.toMatch(/\]\(\/(?!docs\/)/);
+  });
+
+  it("leaves links untouched when unmounted", async () => {
+    const res = await app.request("/index.md", {}, env);
+    expect(await res.text()).toContain("](/llms.txt)");
+  });
+});
+
 describe("markdown content negotiation", () => {
   it("returns raw markdown for Accept: text/markdown", async () => {
     const res = await app.request(
