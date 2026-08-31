@@ -33,14 +33,13 @@
   "env": {
     "staging": {
       "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset" },
-      "routes": [
-        { "pattern": "staging.api.wzrd.tech", "custom_domain": true }
-      ],
+      // TODO: switch to { "pattern": "staging.api.wzrd.tech", "custom_domain": true } once the wzrd.tech zone is on Cloudflare
+      "workers_dev": true,
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "wzrdmail-staging",
-          "database_id": "placeholder-set-by-setup-script",
+          "database_id": "45c16abd-562f-4b6d-9638-814a6b1ca54c",
           "migrations_dir": "migrations"
         }
       ],
@@ -48,17 +47,18 @@
         { "binding": "MAIL", "bucket_name": "wzrdmail-mail-staging" }
       ],
       "kv_namespaces": [
-        { "binding": "CACHE", "id": "placeholder-set-by-setup-script" }
+        { "binding": "CACHE", "id": "b9e4aea7ad8140fe93c21bca3f8abe6c" }
       ]
     },
     "production": {
       "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset" },
-      "routes": [{ "pattern": "api.wzrd.tech", "custom_domain": true }],
+      // TODO: switch to { "pattern": "api.wzrd.tech", "custom_domain": true } once the wzrd.tech zone is on Cloudflare
+      "workers_dev": true,
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "wzrdmail-prod",
-          "database_id": "placeholder-set-by-setup-script",
+          "database_id": "d519719f-cd97-4c0c-bc90-8ce2bf5eba75",
           "migrations_dir": "migrations"
         }
       ],
@@ -66,7 +66,7 @@
         { "binding": "MAIL", "bucket_name": "wzrdmail-mail-prod" }
       ],
       "kv_namespaces": [
-        { "binding": "CACHE", "id": "placeholder-set-by-setup-script" }
+        { "binding": "CACHE", "id": "c8d597cd11a14c2284a65fdb4316034f" }
       ]
     }
   }
