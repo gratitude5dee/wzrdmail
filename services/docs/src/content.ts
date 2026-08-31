@@ -68,7 +68,7 @@ curl https://api.wzrd.tech/v0/inboxes/scout@wzrd.tech/threads \\
 Any MCP client gets the same power with one line:
 
 \`\`\`bash
-claude mcp add --transport http wzrdmail https://mcp.wzrd.tech/mcp
+claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp
 \`\`\`
 
 ## 6. Or the CLI

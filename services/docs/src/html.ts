@@ -1,9 +1,9 @@
 import { PAGES } from "./content.js";
 
 /**
- * Docs shell — Pixel OS design language (hard 1px outlines, 2px hard offset
- * shadows, mono chrome type, Inter-ish prose) in a three-zone docs layout:
- * top header, grouped sidebar nav, content column.
+ * Docs shell — dark runtime-console design language (deep blue-black surfaces,
+ * cyan accents, mono chrome type, Inter-ish prose) in a three-zone docs
+ * layout: top header, grouped sidebar nav, content column.
  */
 
 interface NavGroup {
@@ -49,42 +49,28 @@ ${group.items
 
 const STYLE = `
 :root {
-  --bg: #fafafa;
-  --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --ring: rgba(0, 0, 0, 0.08);
-  --border: #e6e8ec;
-  --text: #1a1a1a;
-  --muted: #8a8a8e;
-  --muted-2: #5f5f66;
-  --accent: #2b7fff;
-  --accent-soft: rgba(43, 127, 255, 0.12);
-  --outline: rgba(26, 26, 26, 0.85);
-  --hard: rgba(26, 26, 26, 0.18);
-  --shadow-hard: 2px 2px 0 var(--hard);
+  --bg: #060d13;
+  --bg-glow: radial-gradient(80rem 40rem at 70% -10%, rgba(34, 211, 238, 0.06), transparent 60%);
+  --surface: #0b141c;
+  --surface-2: #101b25;
+  --ring: rgba(148, 199, 214, 0.14);
+  --border: rgba(148, 199, 214, 0.12);
+  --text: #e7eef3;
+  --muted: #71838f;
+  --muted-2: #9db0bb;
+  --accent: #4cc7e6;
+  --accent-soft: rgba(76, 199, 230, 0.14);
+  --outline: rgba(148, 199, 214, 0.22);
+  --hard: rgba(0, 0, 0, 0.45);
+  --shadow-hard: 0 8px 30px rgba(0, 0, 0, 0.35);
   --font-chrome: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  color-scheme: light dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #101012;
-    --surface: #1a1a1c;
-    --surface-2: #232326;
-    --ring: rgba(255, 255, 255, 0.12);
-    --border: #2c2c31;
-    --text: #f5f5f5;
-    --muted: #a3a3a3;
-    --muted-2: #8b8b93;
-    --accent: #4d94ff;
-    --accent-soft: rgba(77, 148, 255, 0.16);
-    --outline: rgba(245, 245, 245, 0.85);
-    --hard: rgba(0, 0, 0, 0.5);
-  }
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
-  background: var(--bg); color: var(--text);
+  background: var(--bg); background-image: var(--bg-glow); background-repeat: no-repeat;
+  color: var(--text);
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   letter-spacing: -0.12px; line-height: 1.65;
   -webkit-font-smoothing: antialiased;
@@ -101,13 +87,14 @@ header.top {
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; padding: 0.7rem 1.25rem;
-  background: var(--surface);
+  background: rgba(11, 20, 28, 0.85); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
 header.top .brand {
-  display: flex; align-items: baseline; gap: 0.55rem;
+  display: flex; align-items: center; gap: 0.55rem;
   color: var(--text); font-weight: 700;
 }
+header.top .brand img { width: 22px; height: 22px; display: block; }
 header.top .brand:hover { text-decoration: none; }
 header.top .brand .tag { color: var(--muted); font-weight: 400; }
 header.top nav { display: flex; gap: 0.4rem; }
@@ -134,8 +121,8 @@ aside.side { position: sticky; top: 4rem; align-self: start; }
 }
 .navlink:hover { text-decoration: none; color: var(--text); background: var(--surface-2); }
 .navlink.active {
-  color: var(--text); background: var(--surface);
-  border-color: var(--outline); box-shadow: var(--shadow-hard);
+  color: var(--accent); background: var(--accent-soft);
+  border-color: rgba(76, 199, 230, 0.3);
 }
 main { min-width: 0; }
 main h1 { font-size: 1.9rem; letter-spacing: -0.02em; margin: 0.2rem 0 0.8rem; }
@@ -176,11 +163,14 @@ export function pageHtml(
 <title>${title} · wzrdmail docs</title>
 <meta name="description" content="${description}">
 <link rel="llms-txt" href="/llms.txt">
+<link rel="icon" href="https://mail.wzrd.tech/favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" href="https://mail.wzrd.tech/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="https://mail.wzrd.tech/apple-touch-icon.png">
 <style>${STYLE}</style>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/">wzrdmail <span class="tag chrome">docs</span></a>
+  <a class="brand" href="/"><img src="https://mail.wzrd.tech/logo.png" alt="wzrdmail logo" width="22" height="22">wzrdmail <span class="tag chrome">docs</span></a>
   <nav>
     <a href="https://wzrd.tech">wzrd.tech</a>
     <a href="https://console.wzrd.tech">Console</a>

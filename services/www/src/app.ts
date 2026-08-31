@@ -1,11 +1,35 @@
 import { Hono } from "hono";
 import { accepts } from "./accept.js";
+import appleTouchIcon from "./assets/apple-touch-icon.png";
+import faviconIco from "./assets/favicon.ico";
+import favicon32 from "./assets/favicon-32.png";
+import icon192 from "./assets/icon-192.png";
+import logoPng from "./assets/logo.png";
 import type { Env } from "./env.js";
 import { LLMS_TXT } from "./llms.js";
 import { landingHtml } from "./page.js";
 
+const ASSETS: Record<string, { body: ArrayBuffer; type: string }> = {
+  "/logo.png": { body: logoPng, type: "image/png" },
+  "/favicon.ico": { body: faviconIco, type: "image/x-icon" },
+  "/favicon-32.png": { body: favicon32, type: "image/png" },
+  "/icon-192.png": { body: icon192, type: "image/png" },
+  "/apple-touch-icon.png": { body: appleTouchIcon, type: "image/png" }
+};
+
 export function createApp(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
+
+  for (const [path, asset] of Object.entries(ASSETS)) {
+    app.get(path, () =>
+      new Response(asset.body, {
+        headers: {
+          "Content-Type": asset.type,
+          "Cache-Control": "public, max-age=86400"
+        }
+      })
+    );
+  }
 
   app.get("/llms.txt", (c) =>
     c.text(LLMS_TXT, 200, { "Content-Type": "text/plain; charset=utf-8" })

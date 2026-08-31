@@ -96,7 +96,7 @@ describe("GET /llms.txt", () => {
     expect(body).toContain("If you are an AI agent");
     expect(body).toContain("WZRDMAIL_API_KEY");
     expect(body).toContain("https://api.wzrd.tech/v0/agent/sign-up");
-    expect(body).toContain("https://mcp.wzrd.tech/mcp");
+    expect(body).toContain("https://mcp.mail.wzrd.tech/mcp");
     expect(body).toContain("wm_live_");
   });
 });
