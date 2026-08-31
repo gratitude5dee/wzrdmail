@@ -27,6 +27,19 @@ async function seedKey(
   return key;
 }
 
+async function seedOtp(orgId: string, code: string, createdAt?: string): Promise<void> {
+  const created = createdAt ?? new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
+     VALUES (?, 'agent_verify', ?, 0, ?, ?)
+     ON CONFLICT (org_id, purpose) DO UPDATE
+       SET code_hash = excluded.code_hash, attempts = 0,
+           expires_at = excluded.expires_at, created_at = excluded.created_at`
+  )
+    .bind(orgId, await hashApiKey(code), new Date(Date.now() + 600_000).toISOString(), created)
+    .run();
+}
+
 function authed(key: string, init?: RequestInit): RequestInit {
   return {
     ...init,
@@ -157,20 +170,15 @@ describe("agent onboarding (§M2)", () => {
     );
     const body = (await res.json()) as { api_key: string; organization_id: string };
 
+    // OTP delivery fails in tests (no EMAIL binding), so seed a known code.
+    await seedOtp(body.organization_id, "482913");
+
     const wrong = await app.request(
       "/v0/agent/verify",
       authed(body.api_key, { method: "POST", body: JSON.stringify({ otp_code: "000000" }) }),
       env
     );
-    // 1-in-a-million chance the random code is 000000; accept either outcome.
-    expect([200, 400]).toContain(wrong.status);
-
-    // Overwrite with a known code hash to verify deterministically.
-    await env.DB.prepare(
-      "UPDATE otp_codes SET code_hash = ? WHERE org_id = ? AND purpose = 'agent_verify'"
-    )
-      .bind(await hashApiKey("482913"), body.organization_id)
-      .run();
+    expect(wrong.status).toBe(400);
     const ok = await app.request(
       "/v0/agent/verify",
       authed(body.api_key, { method: "POST", body: JSON.stringify({ otp_code: "482913" }) }),
@@ -178,6 +186,55 @@ describe("agent onboarding (§M2)", () => {
     );
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as { verified: boolean }).verified).toBe(true);
+  });
+
+  it("rate-limits resend and preserves the pending code on delivery failure", async () => {
+    const res = await app.request(
+      "/v0/agent/sign-up",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ human_email: "resend-me@example.com", username: "resend-agent" })
+      },
+      env
+    );
+    const body = (await res.json()) as { api_key: string; organization_id: string };
+
+    // A code issued moments ago blocks an immediate resend.
+    await seedOtp(body.organization_id, "111222");
+    const tooSoon = await app.request(
+      "/v0/agent/verify/resend",
+      authed(body.api_key, { method: "POST" }),
+      env
+    );
+    expect(tooSoon.status).toBe(429);
+    expect(Number(tooSoon.headers.get("Retry-After"))).toBeGreaterThan(0);
+
+    // Past the cooldown, delivery fails in tests (no EMAIL binding) — the
+    // pending code must survive.
+    await seedOtp(body.organization_id, "111222", new Date(Date.now() - 120_000).toISOString());
+    const failed = await app.request(
+      "/v0/agent/verify/resend",
+      authed(body.api_key, { method: "POST" }),
+      env
+    );
+    expect(failed.status).toBe(500);
+
+    // A failed delivery must not start a cooldown: retrying immediately is
+    // allowed (and fails on delivery again, not on rate limiting).
+    const retry = await app.request(
+      "/v0/agent/verify/resend",
+      authed(body.api_key, { method: "POST" }),
+      env
+    );
+    expect(retry.status).toBe(500);
+
+    const ok = await app.request(
+      "/v0/agent/verify",
+      authed(body.api_key, { method: "POST", body: JSON.stringify({ otp_code: "111222" }) }),
+      env
+    );
+    expect(ok.status).toBe(200);
   });
 
   it("hides foreign organizations", async () => {

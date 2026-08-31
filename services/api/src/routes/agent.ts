@@ -16,6 +16,7 @@ export const agent = new Hono<{ Bindings: Env }>();
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const SHARED_DOMAIN = "wzrd.tech";
 
 function randomToken(bytes: number): string {
@@ -30,9 +31,42 @@ function randomOtp(): string {
   return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
 }
 
-/** Stores a fresh OTP and emails it; returns whether delivery succeeded. */
+/**
+ * Emails a fresh OTP and stores it only after delivery succeeds, so a failed
+ * send leaves any previously delivered code valid. Returns whether delivery
+ * succeeded.
+ */
 async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<boolean> {
   const code = randomOtp();
+  const mime = createMimeMessage();
+  const from = `noreply@${SHARED_DOMAIN}`;
+  mime.setSender(from);
+  mime.setTo(humanEmail);
+  mime.setSubject("Your wzrdmail verification code");
+  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
+  mime.addMessage({
+    contentType: "text/plain",
+    data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
+  });
+  const provider = new CloudflareEmailProvider(env);
+  const recipient = humanEmail.toLowerCase();
+  try {
+    const outcome = await provider.send({ from, to: [recipient], raw: mime.asRaw() });
+    if (!outcome.accepted.includes(recipient)) {
+      console.error(
+        JSON.stringify({
+          msg: "otp_send_rejected",
+          org_id: orgId,
+          error: outcome.rejected[0]?.error ?? "recipient not accepted"
+        })
+      );
+      return false;
+    }
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
+    return false;
+  }
+
   const now = new Date();
   await env.DB.prepare(
     `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
@@ -48,25 +82,7 @@ async function issueOtp(env: Env, orgId: string, humanEmail: string): Promise<bo
       now.toISOString()
     )
     .run();
-
-  const mime = createMimeMessage();
-  const from = `noreply@${SHARED_DOMAIN}`;
-  mime.setSender(from);
-  mime.setTo(humanEmail);
-  mime.setSubject("Your wzrdmail verification code");
-  mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
-  mime.addMessage({
-    contentType: "text/plain",
-    data: `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-  });
-  const provider = new CloudflareEmailProvider(env);
-  try {
-    await provider.send({ from, to: [humanEmail.toLowerCase()], raw: mime.asRaw() });
-    return true;
-  } catch (err) {
-    console.error(JSON.stringify({ msg: "otp_send_failed", org_id: orgId, error: String(err) }));
-    return false;
-  }
+  return true;
 }
 
 agent.post("/agent/sign-up", async (c) => {
@@ -148,8 +164,45 @@ agent.post("/agent/verify/resend", async (c) => {
   if (auth.org_verified) {
     throw new ApiError("conflict", "organization is already verified");
   }
+  const pending = await c.env.DB.prepare(
+    "SELECT created_at FROM otp_codes WHERE org_id = ? AND purpose = 'agent_verify'"
+  )
+    .bind(auth.org_id)
+    .first<{ created_at: string }>();
+  let claimedAt: string | null = null;
+  if (pending) {
+    const remainingMs =
+      OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(pending.created_at).getTime());
+    if (remainingMs > 0) {
+      c.header("Retry-After", String(Math.ceil(remainingMs / 1000)));
+      throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
+    }
+    // Claim the cooldown window atomically so concurrent resends cannot each
+    // trigger a send: only the request that bumps created_at proceeds.
+    claimedAt = new Date().toISOString();
+    const claimed = await c.env.DB.prepare(
+      `UPDATE otp_codes SET created_at = ?
+       WHERE org_id = ? AND purpose = 'agent_verify' AND created_at = ?`
+    )
+      .bind(claimedAt, auth.org_id, pending.created_at)
+      .run();
+    if (claimed.meta.changes === 0) {
+      c.header("Retry-After", String(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000)));
+      throw new ApiError("rate_limited", "a verification code was just sent; wait before resending");
+    }
+  }
   const delivered = await issueOtp(c.env, auth.org_id, auth.human_email);
   if (!delivered) {
+    // Release the claim so a failed delivery does not start a cooldown; only
+    // restore if the row still carries our claim timestamp.
+    if (pending && claimedAt) {
+      await c.env.DB.prepare(
+        `UPDATE otp_codes SET created_at = ?
+         WHERE org_id = ? AND purpose = 'agent_verify' AND created_at = ?`
+      )
+        .bind(pending.created_at, auth.org_id, claimedAt)
+        .run();
+    }
     throw new ApiError("internal_error", "could not deliver the verification code; try again later");
   }
   return c.json({ organization_id: auth.org_id, message: `Verification code sent to ${auth.human_email}.` });
