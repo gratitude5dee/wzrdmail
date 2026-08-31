@@ -318,7 +318,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
         normalized,
         preview,
         JSON.stringify(participants),
-        JSON.stringify(["unread"]),
+        JSON.stringify(["unread", "received"]),
         now,
         now,
         now,
@@ -333,8 +333,9 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
            participants = (SELECT json_group_array(DISTINCT value) FROM (
              SELECT value FROM json_each(participants)
              UNION SELECT value FROM json_each(?))),
-           labels = CASE WHEN EXISTS (SELECT 1 FROM json_each(labels) WHERE value = 'unread')
-             THEN labels ELSE json_insert(labels, '$[#]', 'unread') END
+           labels = (SELECT json_group_array(DISTINCT value) FROM (
+             SELECT value FROM json_each(labels)
+             UNION SELECT value FROM json_each('["unread","received"]')))
          WHERE thread_id = ?${guard}`
       ).bind(now, preview, now, JSON.stringify(participants), threadId, ...guardBinds)
     );

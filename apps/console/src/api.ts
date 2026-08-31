@@ -31,6 +31,23 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** Follows `next_page_token` until the collection is exhausted. */
+export async function apiAll<T>(path: string, key: string): Promise<T[]> {
+  const sep = path.includes("?") ? "&" : "?";
+  const items: T[] = [];
+  const seen = new Set<string>();
+  let token: string | undefined;
+  for (;;) {
+    const url = token ? `${path}${sep}page_token=${encodeURIComponent(token)}` : path;
+    const res = await api<Record<string, T[]> & { next_page_token?: string }>(url);
+    items.push(...(res[key] ?? []));
+    token = res.next_page_token;
+    if (!token || seen.has(token)) break;
+    seen.add(token);
+  }
+  return items;
+}
+
 export interface Session {
   organization_id: string;
   name: string;

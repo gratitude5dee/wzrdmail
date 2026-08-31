@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { ApiRequestError, api, type Message, type Thread } from "../api";
+import { ApiRequestError, api, apiAll, type Message, type Thread } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const FOLDERS = ["Inbox", "Sent", "All Mail"] as const;
@@ -33,11 +33,10 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
   const load = useCallback(async () => {
     setLoading(true);
     const path = query
-      ? `${base}/threads/search?q=${encodeURIComponent(query)}&limit=50`
-      : `${base}/threads?limit=50`;
+      ? `${base}/threads/search?query=${encodeURIComponent(query)}&limit=100`
+      : `${base}/threads?limit=100`;
     try {
-      const res = await api<{ threads: Thread[] }>(path);
-      setThreads(res.threads);
+      setThreads(await apiAll<Thread>(path, "threads"));
     } finally {
       setLoading(false);
     }
@@ -50,7 +49,7 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
   const visible = threads.filter((t) => {
     if (folder === "All Mail") return true;
     if (folder === "Sent") return t.labels.includes("sent");
-    return !t.labels.includes("sent") || t.labels.includes("unread");
+    return t.labels.includes("received") || !t.labels.includes("sent");
   });
 
   return (

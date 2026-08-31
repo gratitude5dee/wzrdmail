@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiRequestError, api, type Inbox, type Usage } from "../api";
+import { ApiRequestError, api, apiAll, type Inbox, type Usage } from "../api";
 import { CapacityBar } from "../components/CapacityBar";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
@@ -15,11 +15,11 @@ export function InboxesPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [inboxRes, usageRes] = await Promise.all([
-      api<{ inboxes: Inbox[] }>("/inboxes?limit=100"),
+    const [inboxList, usageRes] = await Promise.all([
+      apiAll<Inbox>("/inboxes?limit=100", "inboxes"),
       api<Usage>("/usage").catch(() => null)
     ]);
-    setInboxes(inboxRes.inboxes);
+    setInboxes(inboxList);
     setUsage(usageRes);
   }, []);
 

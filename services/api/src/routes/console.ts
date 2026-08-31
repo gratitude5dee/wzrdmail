@@ -48,11 +48,57 @@ consoleAuth.post("/console/login", async (c) => {
     )
       .bind(org.org_id)
       .first<{ created_at: string }>();
-    const remainingMs = pending
-      ? OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(pending.created_at).getTime())
-      : 0;
-    if (remainingMs <= 0) {
-      await issueOtp(c.env, org.org_id, org.human_email, "console_login");
+    const claimedAt = new Date().toISOString();
+    let claimed = false;
+    let placeholder = false;
+    if (pending) {
+      const remainingMs =
+        OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(pending.created_at).getTime());
+      if (remainingMs <= 0) {
+        // Claim the cooldown window atomically so concurrent logins cannot
+        // each trigger a send: only the request that bumps created_at proceeds.
+        const res = await c.env.DB.prepare(
+          `UPDATE otp_codes SET created_at = ?
+           WHERE org_id = ? AND purpose = 'console_login' AND created_at = ?`
+        )
+          .bind(claimedAt, org.org_id, pending.created_at)
+          .run();
+        claimed = res.meta.changes > 0;
+      }
+    } else {
+      // No code yet: claim by inserting an unverifiable placeholder (already
+      // expired, attempts exhausted) that issueOtp will overwrite on success.
+      const res = await c.env.DB.prepare(
+        `INSERT INTO otp_codes (org_id, purpose, code_hash, attempts, expires_at, created_at)
+         VALUES (?, 'console_login', 'claim', 999, ?, ?)
+         ON CONFLICT (org_id, purpose) DO NOTHING`
+      )
+        .bind(org.org_id, new Date(0).toISOString(), claimedAt)
+        .run();
+      claimed = res.meta.changes > 0;
+      placeholder = claimed;
+    }
+    if (claimed) {
+      const delivered = await issueOtp(c.env, org.org_id, org.human_email, "console_login");
+      if (!delivered) {
+        // Release the claim so a failed delivery does not start a cooldown;
+        // only touch the row if it still carries our claim timestamp.
+        if (placeholder) {
+          await c.env.DB.prepare(
+            `DELETE FROM otp_codes
+             WHERE org_id = ? AND purpose = 'console_login' AND code_hash = 'claim' AND created_at = ?`
+          )
+            .bind(org.org_id, claimedAt)
+            .run();
+        } else if (pending) {
+          await c.env.DB.prepare(
+            `UPDATE otp_codes SET created_at = ?
+             WHERE org_id = ? AND purpose = 'console_login' AND created_at = ?`
+          )
+            .bind(pending.created_at, org.org_id, claimedAt)
+            .run();
+        }
+      }
     }
   }
   return c.json({ message: "If this email has an organization, a sign-in code is on its way." });

@@ -8,9 +8,17 @@ export const usage = new Hono<{ Bindings: Env }>();
 const PERIODS = { "24h": 1, "7d": 7, "30d": 30 } as const;
 type Period = keyof typeof PERIODS;
 
+/** Usage counters are org-wide, so pod-scoped keys may not read them. */
+function requireOrgScope(auth: { pod_id: string | null }): void {
+  if (auth.pod_id) {
+    throw new ApiError("forbidden", "usage metrics require an organization-scoped key");
+  }
+}
+
 /** Current-month metrics vs plan limits — drives every console capacity bar. */
 usage.get("/usage", async (c) => {
   const auth = await authenticate(c);
+  requireOrgScope(auth);
   const org = await c.env.DB.prepare("SELECT plan FROM organizations WHERE org_id = ?")
     .bind(auth.org_id)
     .first<{ plan: string }>();
@@ -52,9 +60,60 @@ usage.get("/usage", async (c) => {
   });
 });
 
+/** SDK/CLI contract (§goal.md): month + flat metric list vs plan limits. */
+usage.get("/metrics/usage", async (c) => {
+  const auth = await authenticate(c);
+  requireOrgScope(auth);
+  const org = await c.env.DB.prepare("SELECT plan FROM organizations WHERE org_id = ?")
+    .bind(auth.org_id)
+    .first<{ plan: string }>();
+  const plan = (org?.plan ?? "free") as PlanName;
+  const limits = PLANS[plan] ?? PLANS.free;
+  const month = c.req.query("month") ?? new Date().toISOString().slice(0, 7);
+  const counters = await c.env.DB.prepare(
+    "SELECT metric, value FROM usage_counters WHERE org_id = ? AND month = ?"
+  )
+    .bind(auth.org_id, month)
+    .all<{ metric: string; value: number }>();
+  const byMetric = new Map(counters.results.map((r) => [r.metric, r.value]));
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  // Inbox counts are a point-in-time resource, not a metered counter, so they
+  // are only reported for the current month.
+  const inboxCount =
+    month === currentMonth
+      ? await c.env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM inboxes WHERE org_id = ? AND deleted_at IS NULL"
+        )
+          .bind(auth.org_id)
+          .first<{ n: number }>()
+      : null;
+  const cap = (n: number): number | null => (n === Number.MAX_SAFE_INTEGER ? null : n);
+  return c.json({
+    month,
+    metrics: [
+      ...(inboxCount !== null
+        ? [{ metric: "inboxes", used: inboxCount.n, limit: cap(limits.inboxes) }]
+        : []),
+      {
+        metric: "emails",
+        used: (byMetric.get("emails_sent") ?? 0) + (byMetric.get("emails_received") ?? 0),
+        limit: cap(limits.emailsPerMonth)
+      },
+      { metric: "emails_sent", used: byMetric.get("emails_sent") ?? 0, limit: null },
+      { metric: "emails_received", used: byMetric.get("emails_received") ?? 0, limit: null },
+      {
+        metric: "storage_bytes",
+        used: byMetric.get("storage_bytes") ?? 0,
+        limit: cap(limits.storageBytes)
+      }
+    ]
+  });
+});
+
 /** Event-count aggregates bucketed by day (hour for 24h) for charts. */
 usage.get("/metrics", async (c) => {
   const auth = await authenticate(c);
+  requireOrgScope(auth);
   const period = (c.req.query("period") ?? "7d") as Period;
   const days = PERIODS[period];
   if (!days) throw new ApiError("validation_error", "period must be one of 24h, 7d, 30d");
