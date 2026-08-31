@@ -164,6 +164,9 @@ describe("domains CRUD (§6.6)", () => {
       env
     );
     expect(res.status).toBe(403);
+
+    const list = await app.request("/v0/domains", authed(podKey), env);
+    expect(list.status).toBe(403);
   });
 
   it("lists with pagination and gets by id; foreign domains 404", async () => {
@@ -271,6 +274,30 @@ describe("verification state machine", () => {
     expect(verifiedBody.status).toBe("verified");
   });
 
+  it("matches the SPF include as a whole mechanism, case-insensitively", async () => {
+    const { key } = await seedOrg();
+    const created = await createDomain(key);
+    const token = ((created.dns_records as { value: string }[])[0]!.value).replace(
+      "wzrdmail-verify=",
+      ""
+    );
+
+    mockDns("acme.com", {
+      ...fullZone(token),
+      apexTxt: ["v=spf1 include:_spf.wzrd.tech.evil.com ~all"]
+    });
+    const suffixed = await verify(key, created.domain_id);
+    expect(suffixed.status).toBe("failed");
+    expect(suffixed.failure_reason).toContain("TXT acme.com");
+
+    mockDns("acme.com", {
+      ...fullZone(token),
+      apexTxt: ["v=spf1 include:_SPF.WZRD.TECH ~all"]
+    });
+    const uppercase = await verify(key, created.domain_id);
+    expect(uppercase.status).toBe("verified");
+  });
+
   it("rejects a wrong ownership token", async () => {
     const { key } = await seedOrg();
     const created = await createDomain(key);
@@ -324,6 +351,51 @@ describe("domain-aware inboxes and ingress", () => {
     const inbox = (await ok.json()) as { inbox_id: string; domain: string };
     expect(inbox.inbox_id).toBe("bot@acme.com");
     expect(inbox.domain).toBe("acme.com");
+  });
+
+  it("accepts equivalent forms of a verified domain name", async () => {
+    const { key } = await seedOrg();
+    const created = await createDomain(key);
+    const token = ((created.dns_records as { value: string }[])[0]!.value).replace(
+      "wzrdmail-verify=",
+      ""
+    );
+    mockDns("acme.com", fullZone(token));
+    await app.request(`/v0/domains/${created.domain_id}/verify`, authed(key, { method: "POST" }), env);
+
+    const res = await app.request(
+      "/v0/inboxes",
+      authed(key, { method: "POST", body: JSON.stringify({ username: "bot", domain: " Acme.COM. " }) }),
+      env
+    );
+    expect(res.status).toBe(201);
+    const inbox = (await res.json()) as { inbox_id: string };
+    expect(inbox.inbox_id).toBe("bot@acme.com");
+  });
+
+  it("replays an idempotent inbox create even after the domain later fails", async () => {
+    const { key } = await seedOrg();
+    const created = await createDomain(key);
+    const token = ((created.dns_records as { value: string }[])[0]!.value).replace(
+      "wzrdmail-verify=",
+      ""
+    );
+    mockDns("acme.com", fullZone(token));
+    await app.request(`/v0/domains/${created.domain_id}/verify`, authed(key, { method: "POST" }), env);
+
+    const body = JSON.stringify({ username: "bot", domain: "acme.com", client_id: "replay-1" });
+    const first = await app.request("/v0/inboxes", authed(key, { method: "POST", body }), env);
+    expect(first.status).toBe(201);
+    const original = (await first.json()) as { inbox_id: string };
+
+    await env.DB.prepare("UPDATE domains SET status = 'failed', verified = 0 WHERE domain_id = ?")
+      .bind(created.domain_id)
+      .run();
+
+    const replay = await app.request("/v0/inboxes", authed(key, { method: "POST", body }), env);
+    expect(replay.status).toBe(201);
+    const replayed = (await replay.json()) as { inbox_id: string };
+    expect(replayed.inbox_id).toBe(original.inbox_id);
   });
 
   it("does not allow one org to use another org's verified domain", async () => {

@@ -3,6 +3,7 @@ import {
   CreateInboxInput,
   PLANS,
   UpdateInboxInput,
+  normalizeDomainName,
   ulid,
   validateUsername,
   type PlanName
@@ -71,17 +72,7 @@ inboxes.post("/inboxes", async (c) => {
   requirePermission(auth, "admin");
   const input = await parseBody(c, CreateInboxInput);
 
-  const domain = (input.domain ?? SHARED_DOMAIN).toLowerCase();
-  if (domain !== SHARED_DOMAIN) {
-    const owned = await c.env.DB.prepare(
-      "SELECT domain_id FROM domains WHERE name = ? AND org_id = ? AND status = 'verified'"
-    )
-      .bind(domain, auth.org_id)
-      .first<{ domain_id: string }>();
-    if (!owned) {
-      throw new ApiError("validation_error", `domain ${domain} is not verified for this organization`);
-    }
-  }
+  const domain = normalizeDomainName(input.domain ?? SHARED_DOMAIN);
 
   let username: string;
   if (input.username) {
@@ -93,6 +84,17 @@ inboxes.post("/inboxes", async (c) => {
   }
 
   const result = await withIdempotency(c.env.DB, auth.org_id, "inbox", input.client_id, async () => {
+    if (domain !== SHARED_DOMAIN) {
+      const owned = await c.env.DB.prepare(
+        "SELECT domain_id FROM domains WHERE name = ? AND org_id = ? AND status = 'verified'"
+      )
+        .bind(domain, auth.org_id)
+        .first<{ domain_id: string }>();
+      if (!owned) {
+        throw new ApiError("validation_error", `domain ${domain} is not verified for this organization`);
+      }
+    }
+
     const org = await c.env.DB.prepare(
       "SELECT plan FROM organizations WHERE org_id = ?"
     )

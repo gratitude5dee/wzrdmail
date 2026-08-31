@@ -12,7 +12,7 @@ import type { Context } from "hono";
 import { authenticate, requirePermission, type AuthedKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { DnsLookupError, lookupDns } from "../lib/dns.js";
-import { emitEvent } from "../lib/events.js";
+import { buildEvent } from "../lib/events.js";
 import { collection, parseBody, parsePagination, withIdempotency } from "../lib/http.js";
 
 export const domains = new Hono<{ Bindings: Env }>();
@@ -94,6 +94,7 @@ function requireOrgScope(auth: AuthedKey): void {
 domains.get("/domains", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "read");
+  requireOrgScope(auth);
   const { limit, cursor } = parsePagination(c);
   const rows = (
     await c.env.DB.prepare(
@@ -169,6 +170,7 @@ domains.post("/domains", async (c) => {
 domains.get("/domains/:domain_id", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "read");
+  requireOrgScope(auth);
   const row = await requireDomain(c, auth, c.req.param("domain_id"));
   return c.json(domainJson(row));
 });
@@ -208,7 +210,9 @@ async function runChecks(row: DomainRow): Promise<DnsCheck[]> {
     },
     {
       record: spfRecord,
-      ok: spf.some((v) => v.includes(`include:${SPF_INCLUDE}`)),
+      ok: spf.some((v) =>
+        v.split(/\s+/).some((mech) => mech.toLowerCase() === `include:${SPF_INCLUDE}`)
+      ),
       found: spf
     }
   ];
@@ -232,7 +236,6 @@ domains.post("/domains/:domain_id/verify", async (c) => {
 
   const failed = checks.filter((check) => !check.ok);
   const now = new Date().toISOString();
-  const wasVerified = row.status === "verified";
   const status: DomainStatus = failed.length === 0 ? "verified" : "failed";
   const failureReason =
     failed.length === 0
@@ -240,35 +243,47 @@ domains.post("/domains/:domain_id/verify", async (c) => {
       : `missing or wrong DNS records: ${failed
           .map((check) => `${check.record.type} ${check.record.name}`)
           .join(", ")}`;
-  await c.env.DB.prepare(
+  const update = c.env.DB.prepare(
     `UPDATE domains SET status = ?, verified = ?, verified_at = ?, last_checked_at = ?,
        failure_reason = ?, updated_at = ? WHERE domain_id = ?`
-  )
-    .bind(
-      status,
-      status === "verified" ? 1 : 0,
-      status === "verified" ? (row.verified_at ?? now) : null,
-      now,
-      failureReason,
-      now,
-      row.domain_id
-    )
-    .run();
+  ).bind(
+    status,
+    status === "verified" ? 1 : 0,
+    status === "verified" ? (row.verified_at ?? now) : null,
+    now,
+    failureReason,
+    now,
+    row.domain_id
+  );
 
-  if (status === "verified" && !wasVerified) {
+  let batched = false;
+  if (status === "verified") {
     const pod = await c.env.DB.prepare(
       "SELECT pod_id FROM pods WHERE org_id = ? ORDER BY created_at LIMIT 1"
     )
       .bind(auth.org_id)
       .first<{ pod_id: string }>();
     if (pod) {
-      await emitEvent(c.env.DB, {
+      const event = buildEvent({
         type: "domain.verified",
         org_id: auth.org_id,
         pod_id: pod.pod_id,
         data: { domain_id: row.domain_id, name: row.name }
       });
+      // Emit domain.verified exactly once: the guarded insert only fires for
+      // the request that performs the non-verified -> verified transition,
+      // atomically with the state change.
+      const guardedInsert = c.env.DB.prepare(
+        `INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE (SELECT status FROM domains WHERE domain_id = ?) != 'verified'`
+      ).bind(...event.values, row.domain_id);
+      await c.env.DB.batch([guardedInsert, update]);
+      batched = true;
     }
+  }
+  if (!batched) {
+    await update.run();
   }
 
   return c.json({

@@ -128,12 +128,17 @@ export const DOMAIN_NAME_RE =
 export const DomainStatus = z.enum(["pending", "verified", "failed"]);
 export type DomainStatus = z.infer<typeof DomainStatus>;
 
+/** Canonical form for domain names: trimmed, lowercased, no trailing root dot. */
+export function normalizeDomainName(v: string): string {
+  return v.trim().toLowerCase().replace(/\.$/, "");
+}
+
 export const CreateDomainInput = z.object({
   domain: z
     .string()
     .min(1)
     .max(253)
-    .transform((v) => v.trim().toLowerCase().replace(/\.$/, ""))
+    .transform(normalizeDomainName)
     .refine((v) => DOMAIN_NAME_RE.test(v), { message: "must be a valid domain name" }),
   client_id: z.string().max(256).optional()
 });
