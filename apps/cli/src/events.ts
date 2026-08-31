@@ -117,12 +117,18 @@ export async function tailEvents(options: TailOptions): Promise<void> {
         }
       });
       socket.addEventListener("close", (event) => {
-        // 1000 = normal closure: the server finished the stream deliberately.
-        if (doneClosing || event.code === 1000) {
+        if (doneClosing) {
           resolve(true);
           return;
         }
+        // §8.3: tails must survive Worker restarts, so reconnect even on a
+        // normal closure (1000) — but if the server keeps closing cleanly,
+        // treat it as a deliberate end of stream rather than an error.
         if (retries >= maxRetries) {
+          if (event.code === 1000) {
+            resolve(true);
+            return;
+          }
           reject(new Error("wzrdmail: WebSocket disconnected and retries exhausted"));
           return;
         }
