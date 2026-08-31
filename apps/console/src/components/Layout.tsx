@@ -15,6 +15,9 @@ export function Layout({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await api("/console/logout", { method: "POST", body: "{}" });
+    // The thirdweb wallet persists in the browser; flag the explicit logout
+    // so the login page disconnects it instead of auto-signing back in.
+    localStorage.setItem("wzrdmail:signed-out", "1");
     setSession(null);
     window.location.href = "/";
   };

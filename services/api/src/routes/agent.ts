@@ -172,10 +172,23 @@ agent.post("/agent/verify", async (c) => {
   if (consumed.meta.changes === 0) {
     throw new ApiError("forbidden", "too many attempts; request a new code");
   }
-  const matches =
-    row.code_hash === THIRDWEB_CODE
-      ? await thirdwebComplete(c.env, auth.human_email.toLowerCase(), input.otp_code)
-      : row.code_hash === (await hashApiKey(input.otp_code));
+  let matches: boolean;
+  if (row.code_hash === THIRDWEB_CODE) {
+    const verdict = await thirdwebComplete(c.env, auth.human_email.toLowerCase(), input.otp_code);
+    if (verdict === "unavailable") {
+      // Refund the attempt: the guess was never actually checked.
+      await c.env.DB.prepare(
+        `UPDATE otp_codes SET attempts = attempts - 1
+         WHERE org_id = ? AND purpose = 'agent_verify' AND attempts > 0`
+      )
+        .bind(auth.org_id)
+        .run();
+      throw new ApiError("internal_error", "code verification is temporarily unavailable; try again");
+    }
+    matches = verdict === "ok";
+  } else {
+    matches = row.code_hash === (await hashApiKey(input.otp_code));
+  }
   if (!matches) {
     throw new ApiError("validation_error", "incorrect verification code");
   }

@@ -1,180 +1,182 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createThirdwebClient } from "thirdweb";
+import { ConnectEmbed, ThirdwebProvider, useActiveWallet, useAuthToken } from "thirdweb/react";
+import { inAppWallet } from "thirdweb/wallets";
 import { ApiRequestError, api } from "../api";
 
-export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
-  const [email, setEmail] = useState("");
+declare const __THIRDWEB_CLIENT_ID__: string;
+
+const client = createThirdwebClient({ clientId: __THIRDWEB_CLIENT_ID__ });
+
+// Accounts are keyed by verified email, so only email-bearing auth methods
+// are offered (passkey-only profiles carry no email).
+const wallets = [
+  inAppWallet({
+    auth: { options: ["google", "apple", "email"] }
+  })
+];
+
+const SIGNED_OUT_KEY = "wzrdmail:signed-out";
+
+interface ExchangeResult {
+  registered: boolean;
+  email?: string;
+  organization_id?: string;
+}
+
+function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
+  const authToken = useAuthToken();
+  const wallet = useActiveWallet();
+  const [stage, setStage] = useState<"connect" | "username" | "finishing" | "session-retry">(
+    "connect"
+  );
+  const [email, setEmail] = useState<string | null>(null);
   const [username, setUsername] = useState("");
-  const [code, setCode] = useState("");
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const [stage, setStage] = useState<"email" | "code">("email");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const exchanging = useRef(false);
 
-  const sendCode = async () => {
+  const exchange = async (withUsername?: string) => {
+    if (!authToken) return;
     setBusy(true);
     setError(null);
     try {
-      await api("/console/login", { method: "POST", body: JSON.stringify({ email }) });
-      setStage("code");
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not send the code");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const signUp = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api<{ delivered: boolean; message: string }>("/console/signup", {
+      const res = await api<ExchangeResult>("/console/thirdweb", {
         method: "POST",
-        body: JSON.stringify({ email, username })
+        body: JSON.stringify(
+          withUsername ? { token: authToken, username: withUsername } : { token: authToken }
+        )
       });
-      if (res.delivered) {
-        setStage("code");
+      if (res.registered) {
+        setStage("finishing");
+        try {
+          await onLogin();
+        } catch {
+          // The session cookie is already set; only loading it failed.
+          setStage("session-retry");
+          setError("signed in, but loading the console failed");
+        }
       } else {
-        setError(res.message);
+        setEmail(res.email ?? null);
+        setStage("username");
       }
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not create the account");
+      setError(err instanceof ApiRequestError ? err.message : "could not complete sign-in");
     } finally {
       setBusy(false);
     }
   };
 
-  const verify = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await api("/console/verify", {
-        method: "POST",
-        body: JSON.stringify({ email, otp_code: code })
-      });
-      await onLogin();
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not verify the code");
-    } finally {
-      setBusy(false);
+  useEffect(() => {
+    if (!authToken || stage !== "connect" || exchanging.current) return;
+    if (localStorage.getItem(SIGNED_OUT_KEY)) {
+      // Explicit logout: drop the lingering thirdweb wallet instead of
+      // silently minting a fresh session from it.
+      if (wallet) {
+        void wallet.disconnect().then(() => {
+          localStorage.removeItem(SIGNED_OUT_KEY);
+        });
+      }
+      return;
     }
-  };
+    exchanging.current = true;
+    void exchange().finally(() => {
+      exchanging.current = false;
+    });
+  }, [authToken, stage, wallet]);
 
   return (
     <div className="login-wrap">
       <div className="card login">
         <h1>wzrdmail console</h1>
-        <p className="dim">
-          {mode === "signin"
-            ? "Sign in with the email that owns your organization."
-            : "Create an organization — pick your email and an inbox username."}
-        </p>
-        {stage === "email" ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void (mode === "signin" ? sendCode() : signUp());
-            }}
-          >
-            <div className="field">
-              <label>Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                required
-              />
-            </div>
-            {mode === "signup" && (
-              <div className="field">
-                <label>Username</label>
-                <input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="yourname"
-                  required
-                />
-                <p className="dim">
-                  Your first inbox will be {(username || "yourname").toLowerCase()}@wzrd.tech
-                </p>
-              </div>
-            )}
+        {stage === "session-retry" ? (
+          <>
+            <p className="dim">You are signed in, but the console failed to load.</p>
             <button
               className="btn primary"
-              disabled={busy || !email || (mode === "signup" && !username)}
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError(null);
+                void onLogin()
+                  .catch(() => setError("still could not load the console; try again"))
+                  .finally(() => setBusy(false));
+              }}
             >
-              {busy
-                ? mode === "signin"
-                  ? "Sending…"
-                  : "Creating…"
-                : mode === "signin"
-                  ? "Send sign-in code"
-                  : "Create account"}
+              {busy ? "Loading…" : "Retry"}
             </button>
-          </form>
-        ) : (
+          </>
+        ) : stage === "username" ? (
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void verify();
+              void exchange(username);
             }}
           >
             <p className="dim">
-              We sent a 6-digit code to <b>{email}</b>.
+              Welcome{email ? ` ${email}` : ""} — pick a username to create your organization.
             </p>
             <div className="field">
-              <label>Code</label>
+              <label>Username</label>
               <input
-                inputMode="numeric"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="000000"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="yourname"
                 required
               />
+              <p className="dim">
+                Your first inbox will be {(username || "yourname").toLowerCase()}@wzrd.tech
+              </p>
             </div>
-            <button className="btn primary" disabled={busy || code.length < 6}>
-              {busy ? "Verifying…" : "Sign in"}
-            </button>{" "}
-            <button type="button" className="btn" onClick={() => setStage("email")}>
-              Back
+            <button className="btn primary" disabled={busy || !username}>
+              {busy ? "Creating…" : "Create account"}
             </button>
           </form>
+        ) : (
+          <>
+            <p className="dim">Sign in or sign up with email, Google, and more.</p>
+            <ConnectEmbed
+              client={client}
+              wallets={wallets}
+              theme="dark"
+              showThirdwebBranding={false}
+            />
+            {(busy || stage === "finishing") && <p className="dim">Signing you in…</p>}
+            {authToken && !busy && stage === "connect" && error && (
+              <button className="btn primary" onClick={() => void exchange()}>
+                Retry sign-in
+              </button>
+            )}
+          </>
         )}
         {error && <p className="error">{error}</p>}
-        <p className="dim" style={{ marginTop: 16 }}>
-          {mode === "signin" ? (
-            <>
-              No organization yet?{" "}
-              <a
-                href="#signup"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setMode("signup");
-                  setStage("email");
+        {stage === "username" && wallet && (
+          <p className="dim" style={{ marginTop: 16 }}>
+            Wrong account?{" "}
+            <a
+              href="#restart"
+              onClick={(e) => {
+                e.preventDefault();
+                void wallet.disconnect().then(() => {
+                  setStage("connect");
+                  setEmail(null);
                   setError(null);
-                }}
-              >
-                Sign up
-              </a>
-            </>
-          ) : (
-            <>
-              Already have an account?{" "}
-              <a
-                href="#signin"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setMode("signin");
-                  setStage("email");
-                  setError(null);
-                }}
-              >
-                Sign in
-              </a>
-            </>
-          )}
-        </p>
+                });
+              }}
+            >
+              Start over
+            </a>
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
+  return (
+    <ThirdwebProvider>
+      <LoginInner onLogin={onLogin} />
+    </ThirdwebProvider>
   );
 }

@@ -22,15 +22,16 @@ export function App() {
   const refresh = useCallback(async () => {
     try {
       setSession(await api<Session>("/console/session"));
-    } catch {
+    } catch (err) {
       setSession(null);
+      throw err;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
+    refresh().catch(() => undefined);
   }, [refresh]);
 
   if (loading) return <div className="login-wrap dim">Loading…</div>;
