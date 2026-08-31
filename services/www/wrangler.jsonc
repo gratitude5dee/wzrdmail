@@ -1,0 +1,26 @@
+// wzrdmail landing Worker → wzrd.tech + www.wzrd.tech (§14.2 of goal.md).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wzrdmail-www",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "WZRDMAIL_ENV": "dev"
+  },
+  "env": {
+    "staging": {
+      "vars": { "WZRDMAIL_ENV": "staging" },
+      "workers_dev": true,
+      "routes": [{ "pattern": "staging.wzrd.tech", "custom_domain": true }]
+    },
+    "production": {
+      "vars": { "WZRDMAIL_ENV": "prod" },
+      "workers_dev": true,
+      "routes": [
+        { "pattern": "wzrd.tech", "custom_domain": true },
+        { "pattern": "www.wzrd.tech", "custom_domain": true }
+      ]
+    }
+  }
+}

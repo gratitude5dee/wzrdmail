@@ -133,6 +133,65 @@ importers:
         specifier: ^3.100.0
         version: 3.114.17(@cloudflare/workers-types@4.20260702.1)
 
+  services/docs:
+    dependencies:
+      hono:
+        specifier: ^4.6.0
+        version: 4.13.5
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: ^0.6.0
+        version: 0.6.16(@cloudflare/workers-types@4.20260702.1)(@vitest/runner@2.1.9)(@vitest/snapshot@2.1.9)(vitest@2.1.9(@types/node@22.20.1))
+      '@cloudflare/workers-types':
+        specifier: ^4.20250110.0
+        version: 4.20260702.1
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.19.0
+        version: 8.68.0(eslint@9.39.5)(typescript@5.9.3)
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
+      wrangler:
+        specifier: ^3.100.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260702.1)
+
+  services/www:
+    dependencies:
+      '@wzrdmail/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      hono:
+        specifier: ^4.6.0
+        version: 4.13.5
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: ^0.6.0
+        version: 0.6.16(@cloudflare/workers-types@4.20260702.1)(@vitest/runner@2.1.9)(@vitest/snapshot@2.1.9)(vitest@2.1.9(@types/node@22.20.1))
+      '@cloudflare/workers-types':
+        specifier: ^4.20250110.0
+        version: 4.20260702.1
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.19.0
+        version: 8.68.0(eslint@9.39.5)(typescript@5.9.3)
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
+      wrangler:
+        specifier: ^3.100.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260702.1)
+
 packages:
 
   '@cloudflare/kv-asset-handler@0.3.4':
