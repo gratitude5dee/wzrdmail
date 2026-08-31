@@ -83,8 +83,10 @@ function main(): void {
 
   // 2c. R2
   const bucketName = `wzrdmail-mail-${envName}`;
-  const bucketList = wrangler(["r2", "bucket", "list"]);
-  if (bucketList.includes(bucketName)) {
+  const bucketNames = [...wrangler(["r2", "bucket", "list"]).matchAll(/^name:\s+(\S+)\s*$/gm)].map(
+    (m) => m[1]
+  );
+  if (bucketNames.includes(bucketName)) {
     console.log(`R2 bucket ${bucketName} already exists — ok`);
   } else {
     wrangler(["r2", "bucket", "create", bucketName]);

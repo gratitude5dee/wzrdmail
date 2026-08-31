@@ -152,10 +152,11 @@ CREATE TABLE idempotency_keys (
 );
 
 CREATE TABLE suppressions (
-  org_id TEXT NOT NULL DEFAULT '', -- '' = platform-level scope
+  org_id TEXT, -- NULL = platform-level scope
   address TEXT NOT NULL,
   reason TEXT NOT NULL CHECK (reason IN ('bounce','complaint','manual')),
   source_msg_id TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (org_id, address)
+  created_at TEXT NOT NULL
 );
+-- Unique per scope; COALESCE gives platform (NULL org) rows a stable conflict key.
+CREATE UNIQUE INDEX idx_suppressions_scope ON suppressions(COALESCE(org_id, ''), address);
