@@ -317,6 +317,46 @@ describe("scheduled send", () => {
     expect(provider.sent).toHaveLength(0);
   });
 
+  it("normalizes an offset send_at to UTC", async () => {
+    const inbox = await seedInbox({ address: `s5-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const provider = new StubProvider();
+    // Naive wall-clock ten hours ahead with a +05:00 offset = five hours from now.
+    const naive = new Date(Date.now() + 10 * 60 * 60 * 1000);
+    const local = `${naive.toISOString().slice(0, 19)}+05:00`;
+    const result = await sendMessage(env, provider, ctxFor(inbox), {
+      to: ["tz@example.com"],
+      subject: "Offset",
+      send_at: local
+    });
+    const row = await env.DB.prepare("SELECT send_at FROM messages WHERE msg_id = ?")
+      .bind(result.message_id)
+      .first<{ send_at: string }>();
+    expect(row?.send_at).toBe(new Date(local).toISOString());
+    expect(row?.send_at?.endsWith("Z")).toBe(true);
+  });
+
+  it("settles abandoned queued claims as failed instead of stranding them", async () => {
+    const inbox = await seedInbox({ address: `s6-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const provider = new StubProvider();
+    const result = await sendMessage(env, provider, ctxFor(inbox), {
+      to: ["stuck@example.com"],
+      subject: "Stuck",
+      send_at: FUTURE
+    });
+    // Simulate a dispatch that claimed the row but died before finalizing.
+    const stale = new Date(new Date(FUTURE).getTime() + 1000).toISOString();
+    await env.DB.prepare("UPDATE messages SET state = 'queued', updated_at = ? WHERE msg_id = ?")
+      .bind(stale, result.message_id)
+      .run();
+    const past = new Date(new Date(FUTURE).getTime() + 20 * 60 * 1000);
+    await deliverDueScheduled(env, provider, past);
+    const row = await env.DB.prepare("SELECT state FROM messages WHERE msg_id = ?")
+      .bind(result.message_id)
+      .first<{ state: string }>();
+    expect(row?.state).toBe("failed");
+    expect(provider.sent).toHaveLength(0);
+  });
+
   it("lists scheduled messages with folder=scheduled", async () => {
     const inbox = await seedInbox({ address: `s4-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
     const key = await seedKey(inbox.org_id);
@@ -407,6 +447,18 @@ describe("trash and folders", () => {
       threads: { thread_id: string }[];
     };
     expect(back.threads.map((t) => t.thread_id)).toContain(thread_id);
+  });
+
+  it("shows a trashed thread's messages in its detail view", async () => {
+    const inbox = await seedInbox({ address: `t4-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const { msg_id, thread_id } = await seedMessage(inbox);
+    const threadBase = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/threads`;
+    await app.request(`${threadBase}/${thread_id}`, authed(key, { method: "DELETE" }), env);
+    const detail = await app.request(`${threadBase}/${thread_id}`, authed(key), env);
+    expect(detail.status).toBe(200);
+    const body = (await detail.json()) as { messages: { message_id: string }[] };
+    expect(body.messages.map((m) => m.message_id)).toContain(msg_id);
   });
 
   it("purges trash older than 30 days and keeps newer trash", async () => {

@@ -8,6 +8,13 @@ const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** How many due messages one cron tick will dispatch. */
 const DISPATCH_BATCH = 25;
 
+/**
+ * A scheduled row still `queued` after this long was abandoned mid-dispatch
+ * (e.g. the finalizing state write failed). The provider outcome is unknown,
+ * so it is marked `failed` rather than re-sent, which could double-deliver.
+ */
+const QUEUED_LEASE_MS = 10 * 60 * 1000;
+
 interface ScheduledRow {
   msg_id: string;
   org_id: string;
@@ -45,6 +52,24 @@ export async function deliverDueScheduled(
   provider: MailProvider,
   now: Date = new Date()
 ): Promise<number> {
+  // Recover abandoned claims: dispatch normally flips queued → sent/rejected,
+  // so a scheduled-send row still queued past the lease was orphaned by a
+  // failure after claiming. Its provider outcome is unknown — settle it as
+  // failed instead of leaving it invisible to every future sweep.
+  const leaseCutoff = new Date(now.getTime() - QUEUED_LEASE_MS).toISOString();
+  const abandoned = await env.DB.prepare(
+    `UPDATE messages SET state = 'failed', updated_at = ?
+     WHERE state = 'queued' AND direction = 'outbound' AND send_at IS NOT NULL
+       AND send_at <= ? AND updated_at < ?`
+  )
+    .bind(now.toISOString(), now.toISOString(), leaseCutoff)
+    .run();
+  if (abandoned.meta.changes > 0) {
+    console.error(
+      JSON.stringify({ msg: "scheduled_claims_abandoned", count: abandoned.meta.changes })
+    );
+  }
+
   const due = (
     await env.DB.prepare(
       `SELECT msg_id, org_id, pod_id, inbox_id, thread_id, from_addr, to_addrs, cc_addrs,

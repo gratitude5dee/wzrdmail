@@ -109,9 +109,12 @@ async function threadDetail(
   c: Context<{ Bindings: Env }>,
   thread: ThreadRow
 ): Promise<Response> {
+  // A trashed thread exposes its (recoverable) messages; an active thread
+  // hides individually trashed ones.
   const msgs = (
     await c.env.DB.prepare(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ? AND deleted_at IS NULL
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ?
+       ${thread.deleted_at ? "" : "AND deleted_at IS NULL"}
        ORDER BY created_at, msg_id`
     )
       .bind(thread.thread_id)

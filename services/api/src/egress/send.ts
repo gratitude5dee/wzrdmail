@@ -185,7 +185,12 @@ async function doSend(
   const rfc822MessageId = `<${msgId}@${domain}>`;
   const now = new Date().toISOString();
   const subject = input.subject ?? "";
-  const sendAt = input.send_at && new Date(input.send_at).getTime() > Date.now() ? input.send_at : null;
+  // Normalize to UTC: dispatch compares timestamp strings, so an offset
+  // timestamp would sort incorrectly against ISO-Z values.
+  const sendAt =
+    input.send_at && new Date(input.send_at).getTime() > Date.now()
+      ? new Date(input.send_at).toISOString()
+      : null;
 
   // Build MIME
   const mime = createMimeMessage();
@@ -336,23 +341,28 @@ async function doSend(
        VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
     ).bind(ctx.inbox_id, rfc822MessageId, threadId, msgId)
   );
+  // For scheduled sends the idempotency response is committed atomically with
+  // the message rows: a replay can never observe a committed message without
+  // its stored response (which would let it schedule a second copy).
+  const scheduled: SentMessage | null = sendAt
+    ? {
+        message_id: msgId,
+        thread_id: threadId,
+        state: "scheduled",
+        rfc822_message_id: rfc822MessageId,
+        send_at: sendAt
+      }
+    : null;
+  if (scheduled && reservation) {
+    statements.push(
+      env.DB.prepare(
+        "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND owner = ?"
+      ).bind(JSON.stringify(scheduled), ctx.org_id, reservation.clientId, reservation.owner)
+    );
+  }
   await env.DB.batch(statements);
 
-  if (sendAt) {
-    const scheduled: SentMessage = {
-      message_id: msgId,
-      thread_id: threadId,
-      state: "scheduled",
-      rfc822_message_id: rfc822MessageId,
-      send_at: sendAt
-    };
-    if (reservation) {
-      await env.DB.prepare(
-        "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND owner = ?"
-      )
-        .bind(JSON.stringify(scheduled), ctx.org_id, reservation.clientId, reservation.owner)
-        .run();
-    }
+  if (scheduled) {
     return scheduled;
   }
 
