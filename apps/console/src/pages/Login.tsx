@@ -8,11 +8,15 @@ declare const __THIRDWEB_CLIENT_ID__: string;
 
 const client = createThirdwebClient({ clientId: __THIRDWEB_CLIENT_ID__ });
 
+// Accounts are keyed by verified email, so only email-bearing auth methods
+// are offered (passkey-only profiles carry no email).
 const wallets = [
   inAppWallet({
-    auth: { options: ["google", "apple", "email", "passkey"] }
+    auth: { options: ["google", "apple", "email"] }
   })
 ];
+
+const SIGNED_OUT_KEY = "wzrdmail:signed-out";
 
 interface ExchangeResult {
   registered: boolean;
@@ -23,7 +27,9 @@ interface ExchangeResult {
 function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
   const authToken = useAuthToken();
   const wallet = useActiveWallet();
-  const [stage, setStage] = useState<"connect" | "username" | "finishing">("connect");
+  const [stage, setStage] = useState<"connect" | "username" | "finishing" | "session-retry">(
+    "connect"
+  );
   const [email, setEmail] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,7 +49,13 @@ function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
       });
       if (res.registered) {
         setStage("finishing");
-        await onLogin();
+        try {
+          await onLogin();
+        } catch {
+          // The session cookie is already set; only loading it failed.
+          setStage("session-retry");
+          setError("signed in, but loading the console failed");
+        }
       } else {
         setEmail(res.email ?? null);
         setStage("username");
@@ -56,19 +68,45 @@ function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
   };
 
   useEffect(() => {
-    if (authToken && stage === "connect" && !exchanging.current) {
-      exchanging.current = true;
-      void exchange().finally(() => {
-        exchanging.current = false;
-      });
+    if (!authToken || stage !== "connect" || exchanging.current) return;
+    if (localStorage.getItem(SIGNED_OUT_KEY)) {
+      // Explicit logout: drop the lingering thirdweb wallet instead of
+      // silently minting a fresh session from it.
+      if (wallet) {
+        void wallet.disconnect().then(() => {
+          localStorage.removeItem(SIGNED_OUT_KEY);
+        });
+      }
+      return;
     }
-  }, [authToken, stage]);
+    exchanging.current = true;
+    void exchange().finally(() => {
+      exchanging.current = false;
+    });
+  }, [authToken, stage, wallet]);
 
   return (
     <div className="login-wrap">
       <div className="card login">
         <h1>wzrdmail console</h1>
-        {stage === "username" ? (
+        {stage === "session-retry" ? (
+          <>
+            <p className="dim">You are signed in, but the console failed to load.</p>
+            <button
+              className="btn primary"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError(null);
+                void onLogin()
+                  .catch(() => setError("still could not load the console; try again"))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              {busy ? "Loading…" : "Retry"}
+            </button>
+          </>
+        ) : stage === "username" ? (
           <form
             onSubmit={(e) => {
               e.preventDefault();
