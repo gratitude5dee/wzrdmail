@@ -1,13 +1,39 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, type Metrics, type Thread, type Usage } from "../api";
 import { CapacityBar } from "../components/CapacityBar";
+import GlassIcons from "../components/reactbits/GlassIcons";
 import { useSession } from "../session";
+
+function Icon({ d }: { d: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+const ICONS = {
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2 M5.5 5h13l3.5 7v7H2v-7z",
+  globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M2 12h20 M12 2c3 3.5 3 16.5 0 20 M12 2c-3 3.5-3 16.5 0 20",
+  zap: "M13 2 3 14h7l-1 8 11-13h-7z",
+  key: "M21 2l-2 2 M15.5 7.5 21 2 M11 13a5 5 0 1 0-7 7 5 5 0 0 0 7-7z M11 13l4.5-4.5 M15 11l2 2",
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  chart: "M3 3v18h18 M8 17V9 M13 17V5 M18 17v-6"
+};
 
 const PERIODS = ["24h", "7d", "30d"] as const;
 
 export function OverviewPage() {
   const { session } = useSession();
+  const navigate = useNavigate();
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>("24h");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -55,6 +81,20 @@ export function OverviewPage() {
           </span>
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: 14, paddingBottom: 4 }}>
+        <h3 style={{ marginTop: 0 }}>Quick actions</h3>
+        <GlassIcons
+          items={[
+            { icon: <Icon d={ICONS.inbox} />, color: "indigo", label: "Inboxes", onClick: () => navigate("/inboxes") },
+            { icon: <Icon d={ICONS.globe} />, color: "blue", label: "Domains", onClick: () => navigate("/domains") },
+            { icon: <Icon d={ICONS.zap} />, color: "orange", label: "Webhooks", onClick: () => navigate("/webhooks") },
+            { icon: <Icon d={ICONS.key} />, color: "purple", label: "API keys", onClick: () => navigate("/api-keys") },
+            { icon: <Icon d={ICONS.shield} />, color: "green", label: "Lists", onClick: () => navigate("/lists") },
+            { icon: <Icon d={ICONS.chart} />, color: "red", label: "Metrics", onClick: () => navigate("/metrics") }
+          ]}
+        />
+      </div>
 
       <div className="grid stats" style={{ marginBottom: 14 }}>
         <div className="card stat">

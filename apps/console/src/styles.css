@@ -167,9 +167,23 @@ pre.code {
 .field input, .field select, .field textarea { width: 100%; }
 .modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-.login-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; }
-.login { width: 380px; }
+.login-scene { position: relative; min-height: 100%; overflow: hidden; }
+.login-bg { position: absolute; inset: 0; z-index: 0; opacity: 0.5; }
+.login-bg canvas { width: 100% !important; height: 100% !important; }
+.login-scene .login-wrap { position: relative; z-index: 1; }
+.login-nav-logo { color: var(--text); font-size: 15px; }
+.login-scene .card-nav-cta-button {
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  font-size: 13px;
+}
+.login-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 110px 16px 40px; }
+.login { width: 380px; backdrop-filter: blur(6px); background: rgba(19, 21, 25, 0.88); }
 .login h1 { font-size: 20px; }
+
+.plan-card .plan-card-body { padding: 18px; height: 100%; display: flex; flex-direction: column; }
+.plan-card .plan-card-body .btn { margin-top: auto; align-self: flex-start; }
 
 .mail { display: grid; grid-template-columns: 180px 1fr; gap: 16px; }
 .mail .folders { display: flex; flex-direction: column; gap: 2px; }
