@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { createThirdwebClient } from "thirdweb";
 import { ConnectEmbed, ThirdwebProvider, useActiveWallet, useAuthToken } from "thirdweb/react";
 import { inAppWallet } from "thirdweb/wallets";
@@ -6,6 +6,18 @@ import { ApiRequestError, api } from "../api";
 import CardNav from "../components/reactbits/CardNav";
 
 const Silk = lazy(() => import("../components/reactbits/Silk"));
+
+class SilkBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 const prefersReducedMotion =
   typeof window !== "undefined" &&
@@ -126,9 +138,11 @@ function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
     <div className="login-scene">
       <div className="login-bg" aria-hidden="true">
         {!prefersReducedMotion && (
-          <Suspense fallback={null}>
-            <Silk speed={4} scale={1.1} color="#2a2545" noiseIntensity={1.2} rotation={0.35} />
-          </Suspense>
+          <SilkBoundary>
+            <Suspense fallback={null}>
+              <Silk speed={4} scale={1.1} color="#2a2545" noiseIntensity={1.2} rotation={0.35} />
+            </Suspense>
+          </SilkBoundary>
         )}
       </div>
       <CardNav

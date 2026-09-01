@@ -128,7 +128,7 @@ export default function CardNav({
     const handleResize = () => {
       if (!tlRef.current) return;
 
-      if (isExpanded) {
+      if (isHamburgerOpen) {
         const newHeight = calculateHeight();
         gsap.set(navRef.current, { height: newHeight });
 
@@ -144,12 +144,13 @@ export default function CardNav({
         if (newTl) {
           tlRef.current = newTl;
         }
+        setIsExpanded(false);
       }
     };
 
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [calculateHeight, createTimeline, isExpanded]);
+  }, [calculateHeight, createTimeline, isHamburgerOpen]);
 
   const toggleMenu = () => {
     const tl = tlRef.current;

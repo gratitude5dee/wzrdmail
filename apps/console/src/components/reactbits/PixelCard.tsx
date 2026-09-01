@@ -271,12 +271,13 @@ export default function PixelCard({
 
   const handleAnimation = useCallback(
     (name: "appear" | "disappear") => {
+      if (reducedMotion) return;
       if (animationRef.current !== null) {
         cancelAnimationFrame(animationRef.current);
       }
       animationRef.current = requestAnimationFrame(() => doAnimate(name));
     },
-    [doAnimate]
+    [doAnimate, reducedMotion]
   );
 
   const onMouseEnter = () => handleAnimation("appear");
