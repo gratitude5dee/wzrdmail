@@ -11,7 +11,7 @@ const CreateKeyInput = z.object({
   name: z.string().min(1).max(80),
   pod_id: z.string().startsWith("pod_").optional(),
   permissions: z
-    .array(z.enum(["read", "send", "admin"]))
+    .array(z.enum(["read", "send", "drafts", "admin"]))
     .min(1)
     .default(["admin"])
 });

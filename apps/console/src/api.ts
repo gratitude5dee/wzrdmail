@@ -103,7 +103,24 @@ export interface Message {
   extracted_html: string | null;
   labels: string[];
   attachments: Attachment[];
+  send_at: string | null;
+  deleted_at: string | null;
   created_at: string;
+}
+
+export interface Draft {
+  draft_id: string;
+  inbox_id: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  text: string | null;
+  html: string | null;
+  labels: string[];
+  sent_message_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DnsRecord {

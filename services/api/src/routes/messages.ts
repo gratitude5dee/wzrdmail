@@ -31,7 +31,16 @@ import {
 export const messages = new Hono<{ Bindings: Env }>();
 
 const MESSAGE_COLUMNS =
-  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, created_at, updated_at";
+  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, send_at, deleted_at, created_at, updated_at";
+
+/** `folder` query param: default hides trash; `trash` shows only trashed rows. */
+function folderCondition(c: Context<{ Bindings: Env }>): string {
+  const folder = c.req.query("folder") ?? "";
+  if (folder === "trash") return "deleted_at IS NOT NULL";
+  if (folder === "scheduled") return "deleted_at IS NULL AND state = 'scheduled'";
+  if (folder === "" || folder === "all") return "deleted_at IS NULL";
+  throw new ApiError("validation_error", "folder must be one of: all, trash, scheduled");
+}
 
 async function attachmentsFor(
   db: D1Database,
@@ -90,7 +99,7 @@ messages.get("/inboxes/:inbox_id/messages", async (c) => {
   const before = c.req.query("before") ?? null;
   const after = c.req.query("after") ?? null;
 
-  const conditions = ["inbox_id = ?"];
+  const conditions = ["inbox_id = ?", folderCondition(c)];
   const binds: (string | number)[] = [inbox.inbox_id];
   if (before) {
     conditions.push("created_at < ?");
@@ -141,7 +150,7 @@ messages.get("/inboxes/:inbox_id/messages/search", async (c) => {
   const rows = (
     await c.env.DB.prepare(
       `SELECT ${MESSAGE_COLUMNS} FROM messages
-       WHERE inbox_id = ?
+       WHERE inbox_id = ? AND deleted_at IS NULL
          AND (subject LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR from_addr LIKE ? ESCAPE '\\')${cursorSql}
        ORDER BY created_at DESC, msg_id DESC LIMIT ?`
     )
@@ -260,20 +269,40 @@ messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   );
 });
 
+// Moves the message to trash (soft delete). Trashing a scheduled message
+// cancels its delivery. A cron purge removes trashed rows after 30 days.
 messages.delete("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const row = await requireMessage(c, inbox, c.req.param("msg_id"));
-  await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM attachments WHERE msg_id = ?").bind(row.msg_id),
-    c.env.DB.prepare("DELETE FROM messages WHERE msg_id = ?").bind(row.msg_id),
-    c.env.DB.prepare(
-      `UPDATE threads SET message_count = message_count - 1, updated_at = ?
-       WHERE thread_id = ? AND message_count > 0`
-    ).bind(new Date().toISOString(), row.thread_id)
-  ]);
+  if (!row.deleted_at) {
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      "UPDATE messages SET deleted_at = ?, updated_at = ? WHERE msg_id = ?"
+    )
+      .bind(now, now, row.msg_id)
+      .run();
+  }
   return c.body(null, 204);
+});
+
+messages.post("/inboxes/:inbox_id/messages/:msg_id/restore", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const row = await requireMessage(c, inbox, c.req.param("msg_id"));
+  if (row.deleted_at) {
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      "UPDATE messages SET deleted_at = NULL, updated_at = ? WHERE msg_id = ?"
+    )
+      .bind(now, row.msg_id)
+      .run();
+    row.deleted_at = null;
+    row.updated_at = now;
+  }
+  return c.json(await messageWithAttachments(c, row));
 });
 
 async function sendFromInbox(

@@ -23,8 +23,9 @@ export interface SendContext {
 export interface SentMessage {
   message_id: string;
   thread_id: string;
-  state: "sent" | "rejected";
+  state: "sent" | "rejected" | "scheduled";
   rfc822_message_id: string;
+  send_at?: string;
   rejected_recipients?: { address: string; error: string }[];
 }
 
@@ -184,6 +185,12 @@ async function doSend(
   const rfc822MessageId = `<${msgId}@${domain}>`;
   const now = new Date().toISOString();
   const subject = input.subject ?? "";
+  // Normalize to UTC: dispatch compares timestamp strings, so an offset
+  // timestamp would sort incorrectly against ISO-Z values.
+  const sendAt =
+    input.send_at && new Date(input.send_at).getTime() > Date.now()
+      ? new Date(input.send_at).toISOString()
+      : null;
 
   // Build MIME
   const mime = createMimeMessage();
@@ -269,6 +276,22 @@ async function doSend(
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
   const preview = (input.text ?? "").slice(0, 140);
 
+  // Verify reservation ownership before any deliverable state is committed:
+  // a stale claimant whose reservation was taken over must not schedule or
+  // send another copy.
+  if (reservation) {
+    const renewed = await env.DB.prepare(
+      `UPDATE idempotency_keys SET created_at = ?
+       WHERE org_id = ? AND resource_type = 'message' AND client_id = ?
+         AND response = '' AND owner = ?`
+    )
+      .bind(new Date().toISOString(), ctx.org_id, reservation.clientId, reservation.owner)
+      .run();
+    if (renewed.meta.changes === 0) {
+      throw new ApiError("conflict", "a request with this client_id is already in flight");
+    }
+  }
+
   const rawR2Key = `raw/${ctx.inbox_id}/${msgId}.eml`;
   await env.MAIL.put(rawR2Key, raw);
 
@@ -288,7 +311,7 @@ async function doSend(
     statements.push(
       env.DB.prepare(
         `UPDATE threads SET message_count = message_count + 1, last_message_at = ?,
-           preview = ?, updated_at = ?,
+           preview = ?, updated_at = ?, deleted_at = NULL,
            labels = CASE WHEN EXISTS (SELECT 1 FROM json_each(labels) WHERE value = 'sent')
              THEN labels ELSE json_insert(labels, '$[#]', 'sent') END
          WHERE thread_id = ?`
@@ -300,15 +323,16 @@ async function doSend(
       `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state,
          from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html,
          extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, client_id,
-         raw_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'outbound', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         raw_key, send_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msgId, ctx.org_id, ctx.pod_id, ctx.inbox_id, threadId,
+      sendAt ? "scheduled" : "queued",
       ctx.inbox_id, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc),
       subject, input.text ?? null, input.html ?? null,
       input.text ?? null, input.html ?? null,
       JSON.stringify(input.labels ?? []), rfc822MessageId,
-      refIds[0] ?? null, input.client_id ?? null, rawR2Key, now, now
+      refIds[0] ?? null, input.client_id ?? null, rawR2Key, sendAt, now, now
     )
   );
   statements.push(
@@ -317,11 +341,34 @@ async function doSend(
        VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
     ).bind(ctx.inbox_id, rfc822MessageId, threadId, msgId)
   );
+  // For scheduled sends the idempotency response is committed atomically with
+  // the message rows: a replay can never observe a committed message without
+  // its stored response (which would let it schedule a second copy).
+  const scheduled: SentMessage | null = sendAt
+    ? {
+        message_id: msgId,
+        thread_id: threadId,
+        state: "scheduled",
+        rfc822_message_id: rfc822MessageId,
+        send_at: sendAt
+      }
+    : null;
+  if (scheduled && reservation) {
+    statements.push(
+      env.DB.prepare(
+        "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message' AND client_id = ? AND owner = ?"
+      ).bind(JSON.stringify(scheduled), ctx.org_id, reservation.clientId, reservation.owner)
+    );
+  }
   await env.DB.batch(statements);
 
+  if (scheduled) {
+    return scheduled;
+  }
+
   if (reservation) {
-    // Renew the lease and verify ownership immediately before the provider
-    // call: a claimant whose reservation was taken over must not send.
+    // Renew the lease and verify ownership again immediately before the
+    // provider call: a claimant whose reservation was taken over must not send.
     const renewed = await env.DB.prepare(
       `UPDATE idempotency_keys SET created_at = ?
        WHERE org_id = ? AND resource_type = 'message' AND client_id = ?

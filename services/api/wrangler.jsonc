@@ -10,9 +10,9 @@
     "WZRDMAIL_ENV": "dev",
     "BUILD_SHA": "dev"
   },
-  // Retry sweep + delivery-log retention (inherited by staging/production).
+  // Scheduled-send sweep + trash purge + webhook retry sweep + delivery-log retention.
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   },
   "d1_databases": [
     {
@@ -55,6 +55,7 @@
       "kv_namespaces": [
         { "binding": "CACHE", "id": "b9e4aea7ad8140fe93c21bca3f8abe6c" }
       ],
+      "triggers": { "crons": ["* * * * *"] },
       "send_email": [{ "name": "EMAIL" }]
     },
     "production": {
@@ -75,6 +76,7 @@
       "kv_namespaces": [
         { "binding": "CACHE", "id": "c8d597cd11a14c2284a65fdb4316034f" }
       ],
+      "triggers": { "crons": ["* * * * *"] },
       "send_email": [{ "name": "EMAIL" }]
     }
   }

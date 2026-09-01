@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { ApiRequestError, api, apiAll, type Message, type Thread } from "../api";
+import { ApiRequestError, api, apiAll, type Draft, type Message, type Thread } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
-const FOLDERS = ["Inbox", "Sent", "All Mail"] as const;
+const FOLDERS = ["Inbox", "Sent", "Drafts", "Scheduled", "All Mail", "Trash"] as const;
 type Folder = (typeof FOLDERS)[number];
+// Drafts/Scheduled/Trash use inbox-scoped endpoints, so the unified view
+// only offers the thread folders.
+const UNIFIED_FOLDERS: Folder[] = ["Inbox", "Sent", "All Mail"];
 
 export function InboxDetailPage() {
   const { inboxId = "" } = useParams();
@@ -34,20 +37,22 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
     setLoading(true);
     const path = query
       ? `${base}/threads/search?query=${encodeURIComponent(query)}&limit=100`
-      : `${base}/threads?limit=100`;
+      : folder === "Trash"
+        ? `${base}/threads?folder=trash&limit=100`
+        : `${base}/threads?limit=100`;
     try {
       setThreads(await apiAll<Thread>(path, "threads"));
     } finally {
       setLoading(false);
     }
-  }, [base, query]);
+  }, [base, query, folder]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const visible = threads.filter((t) => {
-    if (folder === "All Mail") return true;
+    if (folder === "All Mail" || folder === "Trash") return true;
     if (folder === "Sent") return t.labels.includes("sent");
     return t.labels.includes("received") || !t.labels.includes("sent");
   });
@@ -74,7 +79,7 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
       </div>
       <div className="mail">
         <div className="folders">
-          {FOLDERS.map((f) => (
+          {(unified ? UNIFIED_FOLDERS : [...FOLDERS]).map((f) => (
             <a
               key={f}
               className={f === folder ? "active" : ""}
@@ -95,24 +100,37 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
             </>
           )}
         </div>
-        <div className="card" style={{ padding: 0 }}>
-          {loading ? (
-            <div className="empty">Loading…</div>
-          ) : visible.length === 0 ? (
-            <div className="empty">
-              <h3>Nothing here</h3>
-              {folder === "Inbox" ? "No conversations yet." : `No mail in ${folder}.`}
-            </div>
-          ) : (
-            <table>
-              <tbody>
-                {visible.map((th) => (
-                  <ThreadRow key={th.thread_id} thread={th} inboxId={inboxId} unified={unified} />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        {folder === "Drafts" ? (
+          <DraftsFolder inboxId={inboxId} />
+        ) : folder === "Scheduled" ? (
+          <ScheduledFolder inboxId={inboxId} />
+        ) : (
+          <div className="card" style={{ padding: 0 }}>
+            {loading ? (
+              <div className="empty">Loading…</div>
+            ) : visible.length === 0 ? (
+              <div className="empty">
+                <h3>Nothing here</h3>
+                {folder === "Inbox" ? "No conversations yet." : `No mail in ${folder}.`}
+              </div>
+            ) : (
+              <table>
+                <tbody>
+                  {visible.map((th) => (
+                    <ThreadRow
+                      key={th.thread_id}
+                      thread={th}
+                      inboxId={inboxId}
+                      unified={unified}
+                      inTrash={folder === "Trash"}
+                      onChanged={() => void load()}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
       {showApi && (
         <UseApiDrawer
@@ -139,16 +157,32 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
 function ThreadRow({
   thread,
   inboxId,
-  unified
+  unified,
+  inTrash,
+  onChanged
 }: {
   thread: Thread;
   inboxId: string;
   unified: boolean;
+  inTrash?: boolean;
+  onChanged?: () => void;
 }) {
   const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
   const target = unified
     ? `/inboxes/${encodeURIComponent(thread.inbox_id)}/threads/${thread.thread_id}`
     : `/inboxes/${encodeURIComponent(inboxId)}/threads/${thread.thread_id}`;
+  const threadBase = `/inboxes/${encodeURIComponent(unified ? thread.inbox_id : inboxId)}/threads/${thread.thread_id}`;
+  const act = async (e: MouseEvent, method: string, path: string) => {
+    e.stopPropagation();
+    setBusy(true);
+    try {
+      await api(path, { method });
+      onChanged?.();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <tr className="clickable" onClick={() => navigate(target)}>
       <td>
@@ -162,8 +196,186 @@ function ThreadRow({
       <td className="dim" style={{ whiteSpace: "nowrap" }}>
         {thread.message_count > 1 && <span className="chip">{thread.message_count}</span>}{" "}
         {new Date(thread.last_message_at).toLocaleString()}
+        {inTrash ? (
+          <button
+            className="btn sm"
+            style={{ marginLeft: 8 }}
+            disabled={busy}
+            onClick={(e) => void act(e, "POST", `${threadBase}/restore`)}
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            className="btn sm"
+            style={{ marginLeft: 8 }}
+            disabled={busy}
+            onClick={(e) => void act(e, "DELETE", threadBase)}
+          >
+            Trash
+          </button>
+        )}
       </td>
     </tr>
+  );
+}
+
+function DraftsFolder({ inboxId }: { inboxId: string }) {
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const base = `/inboxes/${encodeURIComponent(inboxId)}/drafts`;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const all = await apiAll<Draft>(`${base}?limit=100`, "drafts");
+      setDrafts(all.filter((d) => !d.sent_message_id));
+    } finally {
+      setLoading(false);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const run = async (draftId: string, method: string, path: string) => {
+    setBusy(draftId);
+    setError(null);
+    try {
+      await api(path, { method });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "draft action failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      {error && <p className="error" style={{ padding: "0 12px" }}>{error}</p>}
+      {loading ? (
+        <div className="empty">Loading…</div>
+      ) : drafts.length === 0 ? (
+        <div className="empty">
+          <h3>No drafts</h3>
+          Compose a message and save it as a draft.
+        </div>
+      ) : (
+        <table>
+          <tbody>
+            {drafts.map((d) => (
+              <tr key={d.draft_id}>
+                <td>
+                  <div className="thread-row">
+                    <span className="subject">{d.subject || "(no subject)"}</span>
+                    <span className="snippet">
+                      to {d.to.join(", ") || "(no recipients)"} — {d.text ?? ""}
+                    </span>
+                  </div>
+                </td>
+                <td className="dim" style={{ whiteSpace: "nowrap" }}>
+                  {new Date(d.updated_at).toLocaleString()}
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: 8 }}
+                    disabled={busy === d.draft_id || d.to.length === 0}
+                    onClick={() => void run(d.draft_id, "POST", `${base}/${d.draft_id}/send`)}
+                  >
+                    Send
+                  </button>
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: 8 }}
+                    disabled={busy === d.draft_id}
+                    onClick={() => void run(d.draft_id, "DELETE", `${base}/${d.draft_id}`)}
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function ScheduledFolder({ inboxId }: { inboxId: string }) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const base = `/inboxes/${encodeURIComponent(inboxId)}/messages`;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setMessages(await apiAll<Message>(`${base}?folder=scheduled&limit=100`, "messages"));
+    } finally {
+      setLoading(false);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const cancel = async (messageId: string) => {
+    setBusy(messageId);
+    setError(null);
+    try {
+      await api(`${base}/${messageId}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not cancel");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      {error && <p className="error" style={{ padding: "0 12px" }}>{error}</p>}
+      {loading ? (
+        <div className="empty">Loading…</div>
+      ) : messages.length === 0 ? (
+        <div className="empty">
+          <h3>Nothing scheduled</h3>
+          Compose a message with a send time to schedule it.
+        </div>
+      ) : (
+        <table>
+          <tbody>
+            {messages.map((m) => (
+              <tr key={m.message_id}>
+                <td>
+                  <div className="thread-row">
+                    <span className="subject">{m.subject || "(no subject)"}</span>
+                    <span className="snippet">to {m.to.join(", ")}</span>
+                  </div>
+                </td>
+                <td className="dim" style={{ whiteSpace: "nowrap" }}>
+                  {m.send_at ? `sends ${new Date(m.send_at).toLocaleString()}` : ""}
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: 8 }}
+                    disabled={busy === m.message_id}
+                    onClick={() => void cancel(m.message_id)}
+                  >
+                    Cancel
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -270,8 +482,11 @@ function ComposeView({ inboxId }: { inboxId: string }) {
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
   const [text, setText] = useState("");
+  const [sendAt, setSendAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const recipients = () => to.split(",").map((s) => s.trim()).filter(Boolean);
 
   const send = async () => {
     setBusy(true);
@@ -280,14 +495,31 @@ function ComposeView({ inboxId }: { inboxId: string }) {
       await api(`/inboxes/${encodeURIComponent(inboxId)}/messages/send`, {
         method: "POST",
         body: JSON.stringify({
-          to: to.split(",").map((s) => s.trim()).filter(Boolean),
+          to: recipients(),
           subject,
-          text
+          text,
+          ...(sendAt ? { send_at: new Date(sendAt).toISOString() } : {})
         })
       });
       navigate(`/inboxes/${encodeURIComponent(inboxId)}`);
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "could not send");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveDraft = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/inboxes/${encodeURIComponent(inboxId)}/drafts`, {
+        method: "POST",
+        body: JSON.stringify({ to: recipients(), subject, text })
+      });
+      navigate(`/inboxes/${encodeURIComponent(inboxId)}`);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not save draft");
     } finally {
       setBusy(false);
     }
@@ -314,10 +546,23 @@ function ComposeView({ inboxId }: { inboxId: string }) {
           <label>Body</label>
           <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />
         </div>
+        <div className="field">
+          <label>Send at (optional — leave empty to send now)</label>
+          <input
+            type="datetime-local"
+            value={sendAt}
+            onChange={(e) => setSendAt(e.target.value)}
+          />
+        </div>
         {error && <p className="error">{error}</p>}
-        <button className="btn primary" disabled={busy || !to || !text} onClick={() => void send()}>
-          {busy ? "Sending…" : "Send"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn primary" disabled={busy || !to || !text} onClick={() => void send()}>
+            {busy ? "Working…" : sendAt ? "Schedule" : "Send"}
+          </button>
+          <button className="btn" disabled={busy || (!to && !subject && !text)} onClick={() => void saveDraft()}>
+            Save draft
+          </button>
+        </div>
       </div>
     </div>
   );

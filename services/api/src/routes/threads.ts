@@ -22,10 +22,18 @@ import {
 export const threads = new Hono<{ Bindings: Env }>();
 
 const THREAD_COLUMNS =
-  "thread_id, org_id, pod_id, inbox_id, subject, preview, participants, labels, message_count, last_message_at, created_at, updated_at";
+  "thread_id, org_id, pod_id, inbox_id, subject, preview, participants, labels, message_count, deleted_at, last_message_at, created_at, updated_at";
 
 const MESSAGE_COLUMNS =
-  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, created_at, updated_at";
+  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, send_at, deleted_at, created_at, updated_at";
+
+/** `folder` query param: default hides trash; `trash` shows only trashed rows. */
+function folderCondition(c: Context<{ Bindings: Env }>): string {
+  const folder = c.req.query("folder") ?? "";
+  if (folder === "trash") return "deleted_at IS NOT NULL";
+  if (folder === "" || folder === "all") return "deleted_at IS NULL";
+  throw new ApiError("validation_error", "folder must be one of: all, trash");
+}
 
 interface Scope {
   /** Restrict to one inbox (inbox-scoped routes) or the whole key scope. */
@@ -39,7 +47,7 @@ async function listThreads(
   search: string | null
 ): Promise<Response> {
   const { limit, cursor } = parsePagination(c);
-  const conditions = ["org_id = ?"];
+  const conditions = ["org_id = ?", folderCondition(c)];
   const binds: string[] = [auth.org_id];
   if (scope.inboxId) {
     conditions.push("inbox_id = ?");
@@ -101,9 +109,13 @@ async function threadDetail(
   c: Context<{ Bindings: Env }>,
   thread: ThreadRow
 ): Promise<Response> {
+  // A trashed thread exposes its (recoverable) messages; an active thread
+  // hides individually trashed ones.
   const msgs = (
     await c.env.DB.prepare(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ? ORDER BY created_at, msg_id`
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ?
+       ${thread.deleted_at ? "" : "AND deleted_at IS NULL"}
+       ORDER BY created_at, msg_id`
     )
       .bind(thread.thread_id)
       .all<MessageRow>()
@@ -170,20 +182,46 @@ threads.patch("/inboxes/:inbox_id/threads/:thread_id", async (c) => {
   return c.json(threadJson({ ...thread, labels: JSON.stringify(next), updated_at: now }));
 });
 
+// Moves the thread and its messages to trash (soft delete). A cron purge
+// removes trashed rows after 30 days.
 threads.delete("/inboxes/:inbox_id/threads/:thread_id", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const thread = await requireThread(c, auth, c.req.param("thread_id"), inbox.inbox_id);
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      "DELETE FROM attachments WHERE msg_id IN (SELECT msg_id FROM messages WHERE thread_id = ?)"
-    ).bind(thread.thread_id),
-    c.env.DB.prepare("DELETE FROM messages WHERE thread_id = ?").bind(thread.thread_id),
-    c.env.DB.prepare("DELETE FROM message_id_lookup WHERE thread_id = ?").bind(thread.thread_id),
-    c.env.DB.prepare("DELETE FROM threads WHERE thread_id = ?").bind(thread.thread_id)
-  ]);
+  if (!thread.deleted_at) {
+    const now = new Date().toISOString();
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE threads SET deleted_at = ?, updated_at = ? WHERE thread_id = ?"
+      ).bind(now, now, thread.thread_id),
+      c.env.DB.prepare(
+        "UPDATE messages SET deleted_at = ?, updated_at = ? WHERE thread_id = ? AND deleted_at IS NULL"
+      ).bind(now, now, thread.thread_id)
+    ]);
+  }
   return c.body(null, 204);
+});
+
+threads.post("/inboxes/:inbox_id/threads/:thread_id/restore", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const thread = await requireThread(c, auth, c.req.param("thread_id"), inbox.inbox_id);
+  if (thread.deleted_at) {
+    const now = new Date().toISOString();
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE threads SET deleted_at = NULL, updated_at = ? WHERE thread_id = ?"
+      ).bind(now, thread.thread_id),
+      c.env.DB.prepare(
+        "UPDATE messages SET deleted_at = NULL, updated_at = ? WHERE thread_id = ? AND deleted_at = ?"
+      ).bind(now, thread.thread_id, thread.deleted_at)
+    ]);
+    thread.deleted_at = null;
+    thread.updated_at = now;
+  }
+  return c.json(threadJson(thread));
 });
 
 // Org-wide
