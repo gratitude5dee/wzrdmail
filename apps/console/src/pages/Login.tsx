@@ -1,8 +1,45 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { createThirdwebClient } from "thirdweb";
 import { ConnectEmbed, ThirdwebProvider, useActiveWallet, useAuthToken } from "thirdweb/react";
 import { inAppWallet } from "thirdweb/wallets";
 import { ApiRequestError, api } from "../api";
+import CardNav from "../components/reactbits/CardNav";
+
+const Silk = lazy(() => import("../components/reactbits/Silk"));
+
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const NAV_ITEMS = [
+  {
+    label: "Product",
+    bgColor: "#1b1728",
+    textColor: "#e7e9ee",
+    links: [
+      { label: "Landing", href: "https://mail.wzrd.tech", ariaLabel: "wzrdmail landing page" },
+      { label: "Docs", href: "https://mail.wzrd.tech/docs", ariaLabel: "wzrdmail documentation" }
+    ]
+  },
+  {
+    label: "Build",
+    bgColor: "#221c33",
+    textColor: "#e7e9ee",
+    links: [
+      { label: "API reference", href: "https://mail.wzrd.tech/docs", ariaLabel: "API reference" },
+      { label: "llms.txt", href: "https://mail.wzrd.tech/llms.txt", ariaLabel: "llms.txt" }
+    ]
+  },
+  {
+    label: "Agents",
+    bgColor: "#2a2340",
+    textColor: "#e7e9ee",
+    links: [
+      { label: "MCP server", href: "https://mcp.mail.wzrd.tech/mcp", ariaLabel: "MCP server" },
+      { label: "Quickstart", href: "https://mail.wzrd.tech/docs", ariaLabel: "Agent quickstart" }
+    ]
+  }
+];
 
 declare const __THIRDWEB_CLIENT_ID__: string;
 
@@ -86,7 +123,26 @@ function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
   }, [authToken, stage, wallet]);
 
   return (
-    <div className="login-wrap">
+    <div className="login-scene">
+      <div className="login-bg" aria-hidden="true">
+        {!prefersReducedMotion && (
+          <Suspense fallback={null}>
+            <Silk speed={4} scale={1.1} color="#2a2545" noiseIntensity={1.2} rotation={0.35} />
+          </Suspense>
+        )}
+      </div>
+      <CardNav
+        logo={<span className="login-nav-logo">wzrdmail</span>}
+        items={NAV_ITEMS}
+        baseColor="rgba(19, 21, 25, 0.92)"
+        menuColor="#e7e9ee"
+        cta={
+          <a className="card-nav-cta-button" href="https://mail.wzrd.tech/docs">
+            Read the docs
+          </a>
+        }
+      />
+      <div className="login-wrap">
       <div className="card login">
         <h1>wzrdmail console</h1>
         {stage === "session-retry" ? (
@@ -168,6 +224,7 @@ function LoginInner({ onLogin }: { onLogin: () => Promise<void> }) {
             </a>
           </p>
         )}
+      </div>
       </div>
     </div>
   );
