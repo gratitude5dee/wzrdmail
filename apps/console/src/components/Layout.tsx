@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { api } from "../api";
 import { useSession } from "../session";
+import { Icon, type IconName } from "./Icon";
 
 const PLAN_LABELS: Record<string, string> = {
   free: "Free Tier",
@@ -22,48 +23,59 @@ export function Layout({ children }: { children: ReactNode }) {
     window.location.href = "/";
   };
 
+  const item = (to: string, icon: IconName, label: string, end = false) => (
+    <NavLink to={to} end={end} className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
+      <Icon name={icon} />
+      {label}
+    </NavLink>
+  );
+
+  const orgLabel = session.name || session.email;
+
   return (
     <div className="shell">
       <nav className="sidebar">
-        <div className="org">
-          <div className="name">{session.name || session.email}</div>
-          <div className="plan">{PLAN_LABELS[session.plan] ?? session.plan}</div>
+        <div className="brand">
+          <span className="brand-mark">
+            <Icon name="mail" size={15} />
+          </span>
+          wzrdmail
         </div>
-        <NavLink to="/" end className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Overview
-        </NavLink>
-        <NavLink to="/inboxes" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Inboxes
-        </NavLink>
-        <NavLink to="/metrics" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Metrics
-        </NavLink>
+        <div className="org">
+          <span className="org-avatar">{orgLabel.slice(0, 1).toUpperCase()}</span>
+          <span className="org-meta">
+            <span className="name">{orgLabel}</span>
+            <span className="plan">{PLAN_LABELS[session.plan] ?? session.plan}</span>
+          </span>
+        </div>
+        {item("/", "overview", "Overview", true)}
+        {item("/inboxes", "inbox", "Inboxes")}
+        {item("/metrics", "chart", "Metrics")}
         <div className="section">Configuration</div>
-        <NavLink to="/domains" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Domains
-        </NavLink>
-        <NavLink to="/webhooks" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Webhooks
-        </NavLink>
-        <NavLink to="/api-keys" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          API Keys
-        </NavLink>
-        <NavLink to="/lists" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Lists
-        </NavLink>
+        {item("/domains", "globe", "Domains")}
+        {item("/webhooks", "zap", "Webhooks")}
+        {item("/api-keys", "key", "API Keys")}
+        {item("/lists", "shield", "Lists")}
         <div className="spacer" />
-        <NavLink to="/settings" className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
-          Settings
-        </NavLink>
+        {item("/settings", "settings", "Settings")}
         <NavLink to="/upgrade" className="navlink upgrade">
+          <Icon name="upgrade" />
           Upgrade
         </NavLink>
         <a className="navlink" href="https://mail.wzrd.tech/docs" target="_blank" rel="noreferrer">
+          <Icon name="help" />
           Help
         </a>
-        <button className="btn sm" onClick={() => void signOut()}>
-          Sign out
-        </button>
+        <div className="sidebar-user">
+          <span className="org-avatar">{(session.email || "?").slice(0, 1).toUpperCase()}</span>
+          <span className="org-meta">
+            <span className="name">{session.name || "you"}</span>
+            <span className="plan">{session.email}</span>
+          </span>
+          <button className="icon-only" title="Sign out" aria-label="Sign out" onClick={() => void signOut()}>
+            <Icon name="logout" />
+          </button>
+        </div>
       </nav>
       <main className="main">{children}</main>
     </div>

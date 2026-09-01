@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type Metrics, type Usage } from "../api";
+import { ActivityChart, type ActivityPoint } from "../components/ActivityChart";
 import { CapacityBar } from "../components/CapacityBar";
+import { HealthRing } from "../components/HealthRing";
 
 const PERIODS = ["24h", "7d", "30d"] as const;
 
@@ -25,15 +27,14 @@ export function MetricsPage() {
   const bounceRate = sent === 0 ? 0 : (bounced / sent) * 100;
   const complaintRate = sent === 0 ? 0 : (complained / sent) * 100;
 
-  const buckets = new Map<string, { sent: number; received: number }>();
+  const buckets = new Map<string, ActivityPoint>();
   for (const point of metrics?.series ?? []) {
-    const entry = buckets.get(point.bucket) ?? { sent: 0, received: 0 };
+    const entry = buckets.get(point.bucket) ?? { bucket: point.bucket, sent: 0, received: 0 };
     if (point.type === "message.sent") entry.sent += point.count;
     if (point.type === "message.received") entry.received += point.count;
     buckets.set(point.bucket, entry);
   }
-  const chart = [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const max = Math.max(1, ...chart.map(([, v]) => Math.max(v.sent, v.received)));
+  const chart = [...buckets.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
 
   return (
     <div>
@@ -80,37 +81,14 @@ export function MetricsPage() {
         {chart.length === 0 ? (
           <div className="empty">No activity in this period.</div>
         ) : (
-          <>
-            <div className="bars">
-              {chart.map(([bucket, v]) => (
-                <div key={bucket} style={{ flex: 1, display: "flex", gap: 1, alignItems: "flex-end" }}>
-                  <div
-                    className="bar"
-                    title={`${bucket}: ${v.sent} sent`}
-                    style={{ height: `${(v.sent / max) * 100}%` }}
-                  />
-                  <div
-                    className="bar recv"
-                    title={`${bucket}: ${v.received} received`}
-                    style={{ height: `${(v.received / max) * 100}%` }}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="dim" style={{ marginTop: 6 }}>
-              <span className="chip accent">sent</span>{" "}
-              <span className="chip green">received</span>
-            </div>
-          </>
+          <ActivityChart points={chart} />
         )}
       </div>
 
       <div className="grid two" style={{ marginBottom: 14 }}>
         <div className="card">
           <h3>Deliverability</h3>
-          <p>
-            Successful: <b>{sent === 0 ? "—" : `${(100 - bounceRate).toFixed(1)}%`}</b>
-          </p>
+          <HealthRing percent={sent === 0 ? null : Math.max(0, 100 - bounceRate)} label="Successful" />
           <p>
             Bounce rate: <b className={bounceRate >= 5 ? "error" : ""}>{bounceRate.toFixed(2)}%</b>{" "}
             <span className="dim">(risk at 5%)</span>
