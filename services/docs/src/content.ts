@@ -443,32 +443,47 @@ wzrdmail is shape-compatible with AgentMail v0. Code written against AgentMail p
 
 ## Cutover steps
 
-1. **Provision inboxes.** \`POST /v0/inboxes\` with \`{ "username", "client_id" }\` (one pod per tenant via \`POST /v0/pods\` if you use pod isolation). Inboxes land on \`@wzrd.tech\`, which is pre-verified; re-runs with the same \`client_id\` return the existing inbox.
-2. **Register one webhook at your existing endpoint.**
+### 1. Provision inboxes
 
-   \`\`\`http
-   POST /v0/webhooks
-   { "url": "https://<your-app>/api/inbound/email", "event_types": ["message.received"], "pod_ids": ["pod_…"], "client_id": "inbound-v1" }
-   \`\`\`
+\`POST /v0/inboxes\` with \`{ "username", "client_id" }\` (one pod per tenant via \`POST /v0/pods\` if you use pod isolation). Inboxes land on \`@wzrd.tech\`, which is pre-verified; re-runs with the same \`client_id\` return the existing inbox.
 
-   The response carries \`secret\` (\`whsec_…\`) once. Store it as \`WZRDMAIL_WEBHOOK_SECRET\` and hand it to your existing Svix verifier — the verification code does not change. Omit \`pod_ids\` to receive every pod in the organization.
-3. **Mint draft-only keys for sandboxes.** Where AgentMail gave an agent a scoped key that could draft but not send:
+### 2. Register one webhook at your existing endpoint
 
-   \`\`\`http
-   POST /v0/api-keys
-   { "name": "box-<user>", "inbox_id": "<user>@wzrd.tech", "permissions": ["read", "drafts"] }
-   \`\`\`
+\`\`\`http
+POST /v0/webhooks
+{ "url": "https://<your-app>/api/inbound/email", "event_types": ["message.received"], "pod_ids": ["pod_…"], "client_id": "inbound-v1" }
+\`\`\`
 
-   The key sees only that inbox. \`create_draft\` / \`POST …/drafts\` succeed; \`…/messages/send\`, \`…/drafts/{id}/send\`, replies, forwards, \`POST /v0/inboxes\`, and every other inbox return \`403 forbidden\`. Keep a \`send\` key in the control plane that reviews and sends drafts.
-4. **Swap the env vars.** \`AGENTMAIL_API_KEY\` → \`WZRDMAIL_API_KEY\`, base URL → \`https://api.wzrd.tech\`, webhook secret → the new \`whsec_\`. If you gate the switch behind a flag (e.g. \`MAIL_PROVIDER=wzrdmail\`), both providers can run side by side until validation passes.
-5. **Repoint the agent's MCP and skills.** Replace the AgentMail MCP entry with:
+The response carries \`secret\` (\`whsec_…\`) once. Store it as \`WZRDMAIL_WEBHOOK_SECRET\` and hand it to your existing Svix verifier — the verification code does not change. Omit \`pod_ids\` to receive every pod in the organization.
 
-   \`\`\`json
-   { "mcpServers": { "wzrdmail": { "type": "http", "url": "https://mcp.mail.wzrd.tech/mcp", "headers": { "x-api-key": "\${WZRDMAIL_API_KEY}" } } } }
-   \`\`\`
+### 3. Mint draft-only keys for sandboxes
 
-   Tool names are \`list_inboxes\`, \`list_messages\`, \`get_message\`, \`send_message\`, \`reply_to_message\`, \`reply_all_to_message\`, \`forward_message\`, \`list_threads\`, \`get_thread\`, \`search_threads\`, \`create_draft\`, \`update_draft\`, \`send_draft\`, \`get_attachment\`, and more (see the Integrations page). Install the native plugin in place of the AgentMail skill.
-6. **Verify.** Send from a wzrdmail inbox, reply externally, and confirm your endpoint receives \`message.received\` with a valid signature and an \`extracted_text\` field. Then, with the draft-only key, confirm \`create_draft\` succeeds and \`send_draft\` returns \`403\`.
+Where AgentMail gave an agent a scoped key that could draft but not send:
+
+\`\`\`http
+POST /v0/api-keys
+{ "name": "box-<user>", "inbox_id": "<user>@wzrd.tech", "permissions": ["read", "drafts"] }
+\`\`\`
+
+The key sees only that inbox. \`create_draft\` / \`POST …/drafts\` succeed; \`…/messages/send\`, \`…/drafts/{id}/send\`, replies, forwards, \`POST /v0/inboxes\`, and every other inbox return \`403 forbidden\`. Keep a \`send\` key in the control plane that reviews and sends drafts.
+
+### 4. Swap the env vars
+
+\`AGENTMAIL_API_KEY\` → \`WZRDMAIL_API_KEY\`, base URL → \`https://api.wzrd.tech\`, webhook secret → the new \`whsec_\`. If you gate the switch behind a flag (e.g. \`MAIL_PROVIDER=wzrdmail\`), both providers can run side by side until validation passes.
+
+### 5. Repoint the agent's MCP and skills
+
+Replace the AgentMail MCP entry with:
+
+\`\`\`json
+{ "mcpServers": { "wzrdmail": { "type": "http", "url": "https://mcp.mail.wzrd.tech/mcp", "headers": { "x-api-key": "\${WZRDMAIL_API_KEY}" } } } }
+\`\`\`
+
+Tool names are \`list_inboxes\`, \`list_messages\`, \`get_message\`, \`send_message\`, \`reply_to_message\`, \`reply_all_to_message\`, \`forward_message\`, \`list_threads\`, \`get_thread\`, \`search_threads\`, \`create_draft\`, \`update_draft\`, \`send_draft\`, \`get_attachment\`, and more (see the Integrations page). Install the native plugin in place of the AgentMail skill.
+
+### 6. Verify
+
+Send from a wzrdmail inbox, reply externally, and confirm your endpoint receives \`message.received\` with a valid signature and an \`extracted_text\` field. Then, with the draft-only key, confirm \`create_draft\` succeeds and \`send_draft\` returns \`403\`.
 
 ## Inbox-scoped API keys
 
