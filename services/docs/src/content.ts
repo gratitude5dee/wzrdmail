@@ -497,7 +497,7 @@ Send from a wzrdmail inbox, reply externally, and confirm your endpoint receives
 ## Lists receive/block alias
 
 \`\`\`http
-POST   /v0/inboxes/{inbox_id}/lists/receive/block          { "pattern": "spam@example.com" }   # or { "address": … } / { "domain": "junk.example" }
+POST   /v0/inboxes/{inbox_id}/lists/receive/block          { "pattern": "spam@example.com" }   # or { "entry": … } / { "address": … } / { "domain": "junk.example" }
 GET    /v0/inboxes/{inbox_id}/lists/receive/block
 DELETE /v0/inboxes/{inbox_id}/lists/receive/block/{entry}   # entry = lst_… id or the exact pattern
 \`\`\`

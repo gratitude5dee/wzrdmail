@@ -231,11 +231,12 @@ lists.delete("/inboxes/:inbox_id/lists/:entry_id", async (c) => {
 });
 
 // AgentMail-compatible aliases: `/inboxes/{id}/lists/receive/block` is the
-// inbox block list. POST takes `{ pattern }` (or AgentMail's `{ address }` /
-// `{ domain }`); DELETE takes an entry id or the raw pattern as the last
+// inbox block list. POST takes `{ pattern }` (or AgentMail's `{ entry }` /
+// `{ address }` / `{ domain }`); DELETE takes an entry id or the raw pattern as the last
 // segment. Additive — the native `/lists` routes are unchanged.
 const BlockAliasInput = z.object({
   pattern: z.string().optional(),
+  entry: z.string().optional(),
   address: z.string().optional(),
   domain: z.string().optional(),
   client_id: z.string().max(256).optional()
@@ -255,11 +256,12 @@ lists.post("/inboxes/:inbox_id/lists/receive/block", async (c) => {
   const input = await parseBody(c, BlockAliasInput);
   const raw =
     input.pattern ??
+    input.entry ??
     input.address ??
     (input.domain !== undefined ? `@${input.domain.trim().replace(/^@/, "")}` : undefined);
   const pattern = ListPattern.safeParse(raw);
   if (!pattern.success) {
-    throw new ApiError("validation_error", "pattern (or address/domain) is required");
+    throw new ApiError("validation_error", "pattern (or entry/address/domain) is required");
   }
   return insertEntry(c, auth, {
     inbox_id: inbox.inbox_id,

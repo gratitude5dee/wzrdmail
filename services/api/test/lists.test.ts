@@ -418,6 +418,30 @@ describe("AgentMail-compatible receive/block aliases", () => {
     const missing = await app.request(base, authed(key, { method: "POST", body: JSON.stringify({}) }), env);
     expect(missing.status).toBe(400);
 
+    // Air's AgentMail body shape: { entry, reason } (reason is ignored).
+    const byEntry = await app.request(
+      base,
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({ entry: "Air@Example.com", reason: "blocked from People" })
+      }),
+      env
+    );
+    expect(byEntry.status).toBe(201);
+    expect(((await byEntry.json()) as { pattern: string }).pattern).toBe("air@example.com");
+    const dupe = await app.request(
+      base,
+      authed(key, { method: "POST", body: JSON.stringify({ entry: "air@example.com" }) }),
+      env
+    );
+    expect(dupe.status).toBe(409);
+    const delByEntry = await app.request(
+      `${base}/${encodeURIComponent("air@example.com")}`,
+      authed(key, { method: "DELETE" }),
+      env
+    );
+    expect(delByEntry.status).toBe(204);
+
     const list = await app.request(base, authed(key), env);
     const listed = (await list.json()) as { list_entries: { pattern: string; kind: string }[] };
     expect(listed.list_entries.every((e) => e.kind === "block")).toBe(true);
