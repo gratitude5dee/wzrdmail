@@ -57,7 +57,7 @@ Commands:
   webhooks list|create|delete|test  (create: --url URL --event-types t1,t2; test: <webhook_id>)
   domains list|add|verify|records  (add: --domain D; verify/records: <domain_id>)
   pods list|create             (create: [--name NAME])
-  keys list|create|revoke      (create: [--name NAME] [--pod-id ID]; revoke: <key_id>)
+  keys list|create|revoke      (create: [--name NAME] [--pod-id ID] [--inbox-id ADDR] [--permissions read,drafts]; revoke: <key_id>)
   usage [--month YYYY-MM]
   events tail [--inbox-ids a@b,c@d] [--max N]
 
@@ -423,6 +423,8 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     const key = await ctx.client.apiKeys.create({
       name: stringFlag(flags, "name"),
       pod_id: stringFlag(flags, "pod-id"),
+      inbox_id: stringFlag(flags, "inbox-id"),
+      permissions: stringFlag(flags, "permissions")?.split(",").map((p) => p.trim()).filter(Boolean),
       client_id: stringFlag(flags, "client-id")
     });
     emit(ctx, key, () => formatRecord(key));

@@ -1,0 +1,16 @@
+{
+  "name": "wzrdmail",
+  "owner": {
+    "name": "wzrdmail",
+    "email": "support@wzrd.tech"
+  },
+  "description": "Official wzrdmail plugin marketplace. Email infrastructure for AI agents.",
+  "plugins": [
+    {
+      "name": "wzrdmail",
+      "source": "./",
+      "description": "Email for AI agents. Create @wzrd.tech inboxes, send and receive mail, manage threads and drafts, and automate email workflows through the hosted wzrdmail MCP server.",
+      "category": "productivity"
+    }
+  ]
+}

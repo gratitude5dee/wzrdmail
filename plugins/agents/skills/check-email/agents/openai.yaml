@@ -1,0 +1,13 @@
+interface:
+  display_name: "Check Email"
+  short_description: "Read, search, and triage wzrdmail inboxes"
+  default_prompt: "Use $check-email to read, search, or triage mail in a wzrdmail inbox."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "wzrdmail"
+      description: "wzrdmail hosted MCP server"
+      transport: "streamable_http"
+      url: "https://mcp.mail.wzrd.tech/mcp"
+policy:
+  allow_implicit_invocation: true

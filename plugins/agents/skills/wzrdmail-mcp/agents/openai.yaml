@@ -1,0 +1,6 @@
+interface:
+  display_name: "wzrdmail MCP Setup"
+  short_description: "Configure the wzrdmail MCP server"
+  default_prompt: "Use $wzrdmail-mcp to configure or troubleshoot the wzrdmail MCP connection."
+policy:
+  allow_implicit_invocation: true
