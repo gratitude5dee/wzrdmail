@@ -169,8 +169,12 @@ for path in ROOT.rglob("*"):
             error(f"{path.relative_to(ROOT)}: contains {label}: {pattern}")
 
 mcp_config = load_json(".mcp.json").get("mcpServers", {}).get("wzrdmail", {})
-if mcp_config != {"type": "http", "url": "https://mcp.mail.wzrd.tech/mcp"}:
-    error(".mcp.json must contain the hosted wzrdmail MCP server")
+if mcp_config != {
+    "type": "http",
+    "url": "https://mcp.mail.wzrd.tech/mcp",
+    "headers": {"x-api-key": "${WZRDMAIL_API_KEY}"},
+}:
+    error(".mcp.json must contain the hosted wzrdmail MCP server with the x-api-key env header")
 
 if ERRORS:
     print("Repository validation failed:", file=sys.stderr)

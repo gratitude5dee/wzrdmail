@@ -381,4 +381,38 @@ describe("pod_ids delivery filter", () => {
     );
     expect(bad.status).toBe(404);
   });
+
+  it("filters inbox-less events (domain.verified) by the event's pod_id", async () => {
+    const inbox = await seedInbox({ address: `whd11-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const other = await seedInbox({ address: `whd12-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    await env.DB.prepare("UPDATE pods SET org_id = ? WHERE pod_id = ?").bind(inbox.org_id, other.pod_id).run();
+    const key = await seedKey(inbox.org_id);
+    const res = await app.request(
+      "/v0/webhooks",
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({ url: "https://hooks.example.com/wh", pod_ids: [inbox.pod_id] })
+      }),
+      env
+    );
+    const hook = (await res.json()) as { webhook_id: string };
+
+    await emitEvent(env.DB, {
+      type: "domain.verified",
+      org_id: inbox.org_id,
+      pod_id: other.pod_id,
+      data: { domain_id: "dom_x", name: "other.example" }
+    });
+    expect(await allDeliveries(hook.webhook_id)).toHaveLength(0);
+
+    interceptOnce(200);
+    await emitEvent(env.DB, {
+      type: "domain.verified",
+      org_id: inbox.org_id,
+      pod_id: inbox.pod_id,
+      data: { domain_id: "dom_y", name: "mine.example" }
+    });
+    expect(await allDeliveries(hook.webhook_id)).toHaveLength(1);
+    await processDueDeliveries(env);
+  });
 });

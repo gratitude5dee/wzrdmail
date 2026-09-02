@@ -891,4 +891,48 @@ describe("inbox-scoped api keys", () => {
     );
     expect(cross.status).toBe(403);
   });
+
+  it("an inbox-scoped key cannot see, create, or change org-level webhooks", async () => {
+    const seeded = await seedInbox({ address: `ik8-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const admin = await seedKey(seeded.org_id);
+    const orgHook = await app.request(
+      "/v0/webhooks",
+      authed(admin, { method: "POST", body: JSON.stringify({ url: "https://hooks.example.com/org" }) }),
+      env
+    );
+    expect(orgHook.status).toBe(201);
+    const hook = (await orgHook.json()) as { webhook_id: string };
+    const inboxKey = await seedInboxKey(seeded.org_id, seeded.inbox_id);
+
+    const list = await app.request("/v0/webhooks", authed(inboxKey), env);
+    expect(((await list.json()) as { webhooks: unknown[] }).webhooks).toEqual([]);
+    for (const path of [
+      `/v0/webhooks/${hook.webhook_id}`,
+      `/v0/webhooks/${hook.webhook_id}/headers`,
+      `/v0/webhooks/${hook.webhook_id}/deliveries`
+    ]) {
+      expect((await app.request(path, authed(inboxKey), env)).status).toBe(404);
+    }
+    const patch = await app.request(
+      `/v0/webhooks/${hook.webhook_id}`,
+      authed(inboxKey, { method: "PATCH", body: JSON.stringify({ enabled: false }) }),
+      env
+    );
+    expect(patch.status).toBe(404);
+    const createOrg = await app.request(
+      "/v0/webhooks",
+      authed(inboxKey, { method: "POST", body: JSON.stringify({ url: "https://hooks.example.com/x" }) }),
+      env
+    );
+    expect(createOrg.status).toBe(403);
+
+    const own = await app.request(
+      `/v0/inboxes/${encodeURIComponent(seeded.inbox_id)}/webhooks`,
+      authed(inboxKey, { method: "POST", body: JSON.stringify({ url: "https://hooks.example.com/own" }) }),
+      env
+    );
+    expect(own.status).toBe(201);
+    const ownHook = (await own.json()) as { webhook_id: string };
+    expect((await app.request(`/v0/webhooks/${ownHook.webhook_id}`, authed(inboxKey), env)).status).toBe(200);
+  });
 });

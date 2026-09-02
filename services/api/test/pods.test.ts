@@ -113,7 +113,7 @@ describe("pods", () => {
     ).toBe(403);
   });
 
-  it("deleting a pod soft-deletes its inboxes; the last pod cannot be deleted", async () => {
+  it("deleting a pod soft-deletes its inboxes and revokes its scoped keys; the last pod cannot be deleted", async () => {
     const seeded = await seedInbox();
     const key = await seedKey(seeded.org_id);
     const podRes = await app.request(
@@ -128,11 +128,26 @@ describe("pods", () => {
       env
     );
     const inbox = (await inboxRes.json()) as { inbox_id: string };
+    const podKey = await seedKey(seeded.org_id, pod.pod_id);
+    const inboxKeyRes = await app.request(
+      "/v0/api-keys",
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({ name: "box", inbox_id: inbox.inbox_id, permissions: ["read", "drafts"] })
+      }),
+      env
+    );
+    const inboxKey = ((await inboxKeyRes.json()) as { api_key: string }).api_key;
+    expect((await app.request("/v0/pods", authed(podKey), env)).status).toBe(200);
+    expect((await app.request(`/v0/inboxes/${inbox.inbox_id}`, authed(inboxKey), env)).status).toBe(200);
 
     const del = await app.request(`/v0/pods/${pod.pod_id}`, authed(key, { method: "DELETE" }), env);
     expect(del.status).toBe(204);
     expect((await app.request(`/v0/pods/${pod.pod_id}`, authed(key), env)).status).toBe(404);
     expect((await app.request(`/v0/inboxes/${inbox.inbox_id}`, authed(key), env)).status).toBe(404);
+    expect((await app.request("/v0/pods", authed(podKey), env)).status).toBe(401);
+    expect((await app.request(`/v0/inboxes/${inbox.inbox_id}`, authed(inboxKey), env)).status).toBe(401);
+    expect((await app.request("/v0/pods", authed(key), env)).status).toBe(200);
 
     const last = await app.request(`/v0/pods/${seeded.pod_id}`, authed(key, { method: "DELETE" }), env);
     expect(last.status).toBe(409);

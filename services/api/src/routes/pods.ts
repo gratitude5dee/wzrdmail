@@ -112,7 +112,7 @@ pods.get("/pods/:pod_id", async (c) => {
   return c.json(podJson(await requirePod(c, auth, c.req.param("pod_id"))));
 });
 
-/** Soft-deletes the pod and every inbox in it; the org's last pod stays. */
+/** Soft-deletes the pod and every inbox in it and revokes its scoped keys; the org's last pod stays. */
 pods.delete("/pods/:pod_id", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
@@ -132,6 +132,11 @@ pods.delete("/pods/:pod_id", async (c) => {
     c.env.DB.prepare(
       "UPDATE inboxes SET deleted_at = ?, updated_at = ? WHERE pod_id = ? AND deleted_at IS NULL"
     ).bind(now, now, pod.pod_id),
+    c.env.DB.prepare(
+      `UPDATE api_keys SET revoked_at = ?
+       WHERE org_id = ? AND revoked_at IS NULL
+         AND (pod_id = ? OR inbox_id IN (SELECT inbox_id FROM inboxes WHERE pod_id = ?))`
+    ).bind(now, auth.org_id, pod.pod_id, pod.pod_id),
     c.env.DB.prepare("UPDATE pods SET deleted_at = ? WHERE pod_id = ?").bind(now, pod.pod_id)
   ]);
   return c.body(null, 204);

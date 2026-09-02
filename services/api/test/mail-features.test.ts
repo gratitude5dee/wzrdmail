@@ -533,5 +533,19 @@ describe("inbox-scoped draft-only keys", () => {
       env
     );
     expect(otherList.status).toBe(403);
+
+    // Minting keys needs admin, so a draft-only key cannot escalate itself.
+    const mint = await app.request(
+      "/v0/api-keys",
+      authed(key, { method: "POST", body: JSON.stringify({ name: "up", permissions: ["send"] }) }),
+      env
+    );
+    expect(mint.status).toBe(403);
+    const hooks = await app.request(
+      "/v0/webhooks",
+      authed(key, { method: "POST", body: JSON.stringify({ url: "https://example.com/hook" }) }),
+      env
+    );
+    expect(hooks.status).toBe(403);
   });
 });

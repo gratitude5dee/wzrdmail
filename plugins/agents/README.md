@@ -15,6 +15,8 @@ Every packaging shares the same `skills/` directory and the same hosted MCP serv
 https://mcp.mail.wzrd.tech/mcp      x-api-key: wm_live_…
 ```
 
+`.mcp.json` sends `x-api-key: ${WZRDMAIL_API_KEY}`; export `WZRDMAIL_API_KEY=wm_live_…` in the environment the client is launched from (Claude Code and Cursor expand `${VAR}` in MCP headers). Codex users configure the same URL and header in `~/.codex/config.toml` — see `skills/wzrdmail-mcp/SKILL.md`. The hosted MCP accepts only `x-api-key` / `Authorization: Bearer` today; OAuth is not yet available.
+
 ## Skills
 
 | Skill | Use it for |

@@ -2,7 +2,10 @@
   "mcpServers": {
     "wzrdmail": {
       "type": "http",
-      "url": "https://mcp.mail.wzrd.tech/mcp"
+      "url": "https://mcp.mail.wzrd.tech/mcp",
+      "headers": {
+        "x-api-key": "${WZRDMAIL_API_KEY}"
+      }
     }
   }
 }

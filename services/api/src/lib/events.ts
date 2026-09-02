@@ -60,6 +60,7 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
     event_id: built.event_id,
     type: input.type,
     org_id: input.org_id,
+    pod_id: input.pod_id,
     inbox_id: input.inbox_id
   });
   await db.batch([eventInsert, ...deliveryInserts]);

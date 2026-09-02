@@ -13,7 +13,9 @@ https://mcp.mail.wzrd.tech/mcp
 
 It is a Cloudflare Worker in front of the same `/v0` REST API the SDK and CLI use; there is no local Node.js process to run.
 
-## Claude Code, Codex, and Cursor
+## Claude Code and Cursor
+
+The plugin's `.mcp.json` already contains this entry; it only needs `WZRDMAIL_API_KEY` exported in the client's environment.
 
 ```json
 {
@@ -22,18 +24,28 @@ It is a Cloudflare Worker in front of the same `/v0` REST API the SDK and CLI us
       "type": "http",
       "url": "https://mcp.mail.wzrd.tech/mcp",
       "headers": {
-        "x-api-key": "${env:WZRDMAIL_API_KEY}"
+        "x-api-key": "${WZRDMAIL_API_KEY}"
       }
     }
   }
 }
 ```
 
+Cursor and VS Code also accept `${env:WZRDMAIL_API_KEY}`; Claude Code expands only `${WZRDMAIL_API_KEY}`.
+
 Claude Code can also install it directly:
 
 ```bash
 claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp \
   --header "x-api-key: ${WZRDMAIL_API_KEY}"
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.wzrdmail]
+url = "https://mcp.mail.wzrd.tech/mcp"
+env_http_headers = { "x-api-key" = "WZRDMAIL_API_KEY" }
 ```
 
 Hermes / Air boxes:

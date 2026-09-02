@@ -76,7 +76,8 @@ async function requireWebhook(
   if (
     !row ||
     row.org_id !== auth.org_id ||
-    (inboxId !== undefined && row.inbox_id !== inboxId)
+    (inboxId !== undefined && row.inbox_id !== inboxId) ||
+    (auth.inbox_id !== null && row.inbox_id !== auth.inbox_id)
   ) {
     throw new ApiError("not_found", "no such webhook");
   }
@@ -91,6 +92,12 @@ async function listWebhooks(
   const { limit, cursor } = parsePagination(c);
   const conditions = ["org_id = ?", "deleted_at IS NULL"];
   const binds: string[] = [auth.org_id];
+  if (auth.inbox_id) {
+    if (inboxId !== undefined && inboxId !== auth.inbox_id) {
+      throw new ApiError("not_found", "inbox not found");
+    }
+    inboxId = auth.inbox_id;
+  }
   if (inboxId !== undefined) {
     conditions.push("inbox_id = ?");
     binds.push(inboxId);
@@ -122,6 +129,9 @@ async function createWebhook(
   const input = await parseBody(c, CreateWebhookInput);
   assertSafeUrl(input.url, c.env.WZRDMAIL_ENV);
   const inboxId = forcedInboxId ?? input.inbox_id?.toLowerCase();
+  if (auth.inbox_id && inboxId === undefined) {
+    throw new ApiError("forbidden", "inbox-scoped keys can only create webhooks for their own inbox");
+  }
   if (inboxId !== undefined) {
     await requireInbox(c, auth, inboxId);
   }
