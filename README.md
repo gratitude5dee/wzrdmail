@@ -30,6 +30,10 @@ curl -X POST https://api.wzrd.tech/v0/inboxes/scout@wzrd.tech/messages/send \
   bindings, unit-tested.
 - `services/api` — the Worker: Hono `/v0/*` routes, `email()` ingress, queue
   consumers, Durable Objects. D1 migrations in `services/api/migrations/`.
+- `plugins/agents` — native agent plugin (Claude Code / Cursor / Codex /
+  Open Plugins manifests, skills, `.mcp.json` → `mcp.mail.wzrd.tech`).
+- `docs/` — long-form guides (`migrate-from-agentmail.md`, `integrations.md`),
+  also served by `services/docs`.
 - `scripts/setup.ts` — idempotent provisioning (D1/KV/R2, wrangler.jsonc
   patch, migrations, secrets). Copy `scripts/config.example.toml` →
   `scripts/config.toml` first.
