@@ -329,6 +329,44 @@ describe("POST /v0/inboxes/:id/messages/send", () => {
     expect(msg?.state).toBe("rejected");
   });
 
+  it("treats an Idempotency-Key header as the send client_id", async () => {
+    const inbox = await seedInbox();
+    const key = "wm_test_key_idem";
+    await env.DB.prepare(
+      "INSERT INTO api_keys (key_id, org_id, key_hash, key_prefix, created_at) VALUES ('key_idem', ?, ?, 'wm_test', ?)"
+    )
+      .bind(inbox.org_id, await hashApiKey(key), NOW)
+      .run();
+    const app = createApp();
+    const send = () =>
+      app.request(
+        `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/send`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${key}`,
+            "content-type": "application/json",
+            "Idempotency-Key": "idem-abc-1"
+          },
+          body: JSON.stringify({ to: ["dest@example.com"], subject: "hi", text: "hello" })
+        },
+        env
+      );
+    const first = await send();
+    expect(first.status).toBe(200);
+    const firstBody = await first.json<{ message_id: string }>();
+    const second = await send();
+    expect(second.status).toBe(200);
+    const secondBody = await second.json<{ message_id: string }>();
+    expect(secondBody.message_id).toBe(firstBody.message_id);
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE inbox_id = ? AND direction = 'outbound'"
+    )
+      .bind(inbox.inbox_id)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
   it("rejects send for a read-only key", async () => {
     const inbox = await seedInbox();
     const key = "wm_readonly_key";

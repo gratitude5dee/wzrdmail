@@ -193,3 +193,21 @@ export async function withIdempotency<T>(
     throw err;
   }
 }
+
+/**
+ * Frees a client_id when its resource is deleted, so a later create with the
+ * same client_id makes a fresh resource instead of replaying the stored
+ * response for the deleted one.
+ */
+export function releaseClientId(
+  db: D1Database,
+  orgId: string,
+  resourceType: string,
+  clientId: string | null
+): D1PreparedStatement {
+  return db
+    .prepare(
+      "DELETE FROM idempotency_keys WHERE org_id = ? AND resource_type = ? AND client_id = ?"
+    )
+    .bind(orgId, resourceType, clientId ?? "");
+}
