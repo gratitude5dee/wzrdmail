@@ -115,6 +115,7 @@ export const Pod = z.object({
   pod_id: z.string(),
   name: z.string().optional(),
   organization_id: z.string().optional(),
+  client_id: z.string().nullable().optional(),
   created_at: IsoTimestamp
 });
 export type Pod = z.infer<typeof Pod>;

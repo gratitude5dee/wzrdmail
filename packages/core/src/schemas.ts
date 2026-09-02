@@ -118,10 +118,18 @@ export const SendMessageInput = z.object({
 });
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
 
+export const CreatePodInput = z.object({
+  name: z.string().min(1).max(128).optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreatePodInput = z.infer<typeof CreatePodInput>;
+
 export const CreateInboxInput = z.object({
   username: z.string().optional(),
   domain: z.string().optional(),
   display_name: z.string().optional(),
+  /** Place the inbox in a specific pod (defaults to the key's pod or the org's first pod). */
+  pod_id: z.string().optional(),
   client_id: z.string().max(256).optional()
 });
 export type CreateInboxInput = z.infer<typeof CreateInboxInput>;

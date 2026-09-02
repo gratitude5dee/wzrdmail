@@ -9,7 +9,8 @@ import {
   type PlanName
 } from "@wzrdmail/core";
 import { Hono } from "hono";
-import { authenticate, requirePermission } from "../auth.js";
+import type { Context } from "hono";
+import { authenticate, requirePermission, type AuthedKey } from "../auth.js";
 import type { Env } from "../env.js";
 import {
   collection,
@@ -76,7 +77,53 @@ inboxes.post("/inboxes", async (c) => {
   requirePermission(auth, "admin");
   requireNotInboxScoped(auth, "inbox creation");
   const input = await parseBody(c, CreateInboxInput);
+  return createInbox(c, auth, input);
+});
 
+/** AgentMail-compatible alias: create an inbox inside a specific pod. */
+inboxes.post("/pods/:pod_id/inboxes", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  requireNotInboxScoped(auth, "inbox creation");
+  const input = await parseBody(c, CreateInboxInput);
+  return createInbox(c, auth, { ...input, pod_id: c.req.param("pod_id") });
+});
+
+async function resolvePodId(
+  c: Context<{ Bindings: Env }>,
+  auth: AuthedKey,
+  requested: string | undefined
+): Promise<string> {
+  if (requested) {
+    if (auth.pod_id && auth.pod_id !== requested) {
+      throw new ApiError("forbidden", "key is scoped to a different pod");
+    }
+    const pod = await c.env.DB.prepare(
+      "SELECT pod_id FROM pods WHERE pod_id = ? AND org_id = ? AND deleted_at IS NULL"
+    )
+      .bind(requested, auth.org_id)
+      .first<{ pod_id: string }>();
+    if (!pod) throw new ApiError("not_found", "pod not found");
+    return pod.pod_id;
+  }
+  const podId =
+    auth.pod_id ??
+    (
+      await c.env.DB.prepare(
+        "SELECT pod_id FROM pods WHERE org_id = ? AND deleted_at IS NULL ORDER BY created_at LIMIT 1"
+      )
+        .bind(auth.org_id)
+        .first<{ pod_id: string }>()
+    )?.pod_id;
+  if (!podId) throw new ApiError("internal_error", "organization has no pod");
+  return podId;
+}
+
+async function createInbox(
+  c: Context<{ Bindings: Env }>,
+  auth: AuthedKey,
+  input: CreateInboxInput
+): Promise<Response> {
   const domain = normalizeDomainName(input.domain ?? SHARED_DOMAIN);
 
   let username: string;
@@ -115,16 +162,7 @@ inboxes.post("/inboxes", async (c) => {
       throw new ApiError("plan_limit_exceeded", `plan allows at most ${plan.inboxes} inboxes`);
     }
 
-    const podId =
-      auth.pod_id ??
-      (
-        await c.env.DB.prepare(
-          "SELECT pod_id FROM pods WHERE org_id = ? ORDER BY created_at LIMIT 1"
-        )
-          .bind(auth.org_id)
-          .first<{ pod_id: string }>()
-      )?.pod_id;
-    if (!podId) throw new ApiError("internal_error", "organization has no pod");
+    const podId = await resolvePodId(c, auth, input.pod_id);
 
     const inboxId = `${username}@${domain}`;
     const now = new Date().toISOString();
@@ -150,7 +188,7 @@ inboxes.post("/inboxes", async (c) => {
     };
   });
   return c.json(result, 201);
-});
+}
 
 inboxes.get("/inboxes/:inbox_id", async (c) => {
   const auth = await authenticate(c);

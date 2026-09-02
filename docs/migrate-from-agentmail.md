@@ -29,7 +29,7 @@ wzrdmail is shape-compatible with AgentMail v0. Code written against AgentMail p
 
 ### 1. Provision inboxes
 
-`POST /v0/inboxes` with `{ "username", "client_id" }` (one pod per tenant via `POST /v0/pods` if you use pod isolation). Inboxes land on `@wzrd.tech`, which is pre-verified; re-runs with the same `client_id` return the existing inbox.
+One pod per tenant: `POST /v0/pods` with `{ "client_id": "<user_id>" }` (idempotent — a retry returns the same pod; `GET /v0/pods` lists them, `DELETE /v0/pods/{pod_id}` retires the pod and its inboxes). Then `POST /v0/pods/{pod_id}/inboxes` (or `POST /v0/inboxes` with `"pod_id"`) with `{ "username", "client_id" }`. Inboxes land on `@wzrd.tech`, which is pre-verified; re-runs with the same `client_id` return the existing inbox.
 
 ### 2. Register one webhook at your existing endpoint
 
