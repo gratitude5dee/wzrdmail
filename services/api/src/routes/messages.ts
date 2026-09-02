@@ -311,6 +311,12 @@ async function sendFromInbox(
   inbox: InboxRow,
   input: SendMessageInput
 ): Promise<Response> {
+  // AgentMail-compatible header idempotency: an Idempotency-Key header acts
+  // as the send client_id when the body doesn't provide one.
+  const headerKey = c.req.header("idempotency-key");
+  if (input.client_id === undefined && headerKey) {
+    input = { ...input, client_id: headerKey };
+  }
   const ctx: SendContext = {
     inbox_id: inbox.inbox_id,
     org_id: inbox.org_id,
