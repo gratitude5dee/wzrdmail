@@ -16,6 +16,7 @@ import {
   collection,
   parseBody,
   parsePagination,
+  releaseClientId,
   requireInbox,
   requireNotInboxScoped,
   withIdempotency,
@@ -218,10 +219,11 @@ inboxes.delete("/inboxes/:inbox_id", async (c) => {
   requirePermission(auth, "admin");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    "UPDATE inboxes SET deleted_at = ?, updated_at = ? WHERE inbox_id = ?"
-  )
-    .bind(now, now, inbox.inbox_id)
-    .run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE inboxes SET deleted_at = ?, updated_at = ? WHERE inbox_id = ?"
+    ).bind(now, now, inbox.inbox_id),
+    releaseClientId(c.env.DB, auth.org_id, "inbox", inbox.client_id)
+  ]);
   return c.body(null, 204);
 });

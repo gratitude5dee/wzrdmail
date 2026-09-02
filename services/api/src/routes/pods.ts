@@ -7,6 +7,7 @@ import {
   collection,
   parseBody,
   parsePagination,
+  releaseClientId,
   requireNotInboxScoped,
   withIdempotency
 } from "../lib/http.js";
@@ -137,7 +138,13 @@ pods.delete("/pods/:pod_id", async (c) => {
        WHERE org_id = ? AND revoked_at IS NULL
          AND (pod_id = ? OR inbox_id IN (SELECT inbox_id FROM inboxes WHERE pod_id = ?))`
     ).bind(now, auth.org_id, pod.pod_id, pod.pod_id),
-    c.env.DB.prepare("UPDATE pods SET deleted_at = ? WHERE pod_id = ?").bind(now, pod.pod_id)
+    c.env.DB.prepare("UPDATE pods SET deleted_at = ? WHERE pod_id = ?").bind(now, pod.pod_id),
+    releaseClientId(c.env.DB, auth.org_id, "pod", pod.client_id),
+    c.env.DB.prepare(
+      `DELETE FROM idempotency_keys
+       WHERE org_id = ? AND resource_type = 'inbox'
+         AND client_id IN (SELECT client_id FROM inboxes WHERE pod_id = ? AND client_id IS NOT NULL)`
+    ).bind(auth.org_id, pod.pod_id)
   ]);
   return c.body(null, 204);
 });

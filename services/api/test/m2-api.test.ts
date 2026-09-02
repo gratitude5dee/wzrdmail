@@ -690,4 +690,33 @@ describe("webhook pod_ids (AgentMail parity)", () => {
     );
     expect(otherPod.status).toBe(403);
   });
+
+  it("frees the client_id when a webhook is deleted so it can be reused", async () => {
+    const inbox = await seedInbox({ address: `whr-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const clientId = `air-${crypto.randomUUID().slice(0, 6)}`;
+    const body = JSON.stringify({
+      url: "https://example.com/hook",
+      pod_ids: [inbox.pod_id],
+      client_id: clientId
+    });
+
+    const first = await app.request("/v0/webhooks", authed(key, { method: "POST", body }), env);
+    expect(first.status).toBe(201);
+    const firstId = ((await first.json()) as { webhook_id: string }).webhook_id;
+
+    const replay = await app.request("/v0/webhooks", authed(key, { method: "POST", body }), env);
+    expect(((await replay.json()) as { webhook_id: string }).webhook_id).toBe(firstId);
+
+    const del = await app.request(`/v0/webhooks/${firstId}`, authed(key, { method: "DELETE" }), env);
+    expect(del.status).toBe(204);
+
+    const recreated = await app.request("/v0/webhooks", authed(key, { method: "POST", body }), env);
+    expect(recreated.status).toBe(201);
+    const secondId = ((await recreated.json()) as { webhook_id: string }).webhook_id;
+    expect(secondId).not.toBe(firstId);
+
+    const fetched = await app.request(`/v0/webhooks/${secondId}`, authed(key), env);
+    expect(fetched.status).toBe(200);
+  });
 });

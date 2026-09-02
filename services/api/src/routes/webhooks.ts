@@ -13,6 +13,7 @@ import {
   collection,
   parseBody,
   parsePagination,
+  releaseClientId,
   requireInbox,
   withIdempotency
 } from "../lib/http.js";
@@ -243,11 +244,12 @@ async function deleteWebhook(
 ): Promise<Response> {
   const row = await requireWebhook(c, auth, webhookId, inboxId);
   const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    "UPDATE webhooks SET deleted_at = ?, updated_at = ? WHERE webhook_id = ?"
-  )
-    .bind(now, now, row.webhook_id)
-    .run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE webhooks SET deleted_at = ?, updated_at = ? WHERE webhook_id = ?"
+    ).bind(now, now, row.webhook_id),
+    releaseClientId(c.env.DB, auth.org_id, "webhook", row.client_id)
+  ]);
   return c.body(null, 204);
 }
 

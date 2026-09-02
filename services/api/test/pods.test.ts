@@ -151,5 +151,15 @@ describe("pods", () => {
 
     const last = await app.request(`/v0/pods/${seeded.pod_id}`, authed(key, { method: "DELETE" }), env);
     expect(last.status).toBe(409);
+
+    const recreate = await app.request(
+      "/v0/pods",
+      authed(key, { method: "POST", body: JSON.stringify({ client_id: "user_c" }) }),
+      env
+    );
+    expect(recreate.status).toBe(201);
+    const recreated = (await recreate.json()) as { pod_id: string };
+    expect(recreated.pod_id).not.toBe(pod.pod_id);
+    expect((await app.request(`/v0/pods/${recreated.pod_id}`, authed(key), env)).status).toBe(200);
   });
 });
