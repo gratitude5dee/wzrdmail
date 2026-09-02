@@ -352,7 +352,8 @@ describe("pod_ids delivery filter", () => {
     expect(res.status).toBe(201);
     const hook = (await res.json()) as { webhook_id: string };
 
-    await emit(other);
+    const otherInOrg = { ...other, org_id: inbox.org_id };
+    await emit(otherInOrg);
     expect(await allDeliveries(hook.webhook_id)).toHaveLength(0);
 
     interceptOnce(200);
@@ -370,7 +371,7 @@ describe("pod_ids delivery filter", () => {
     expect(((await patched.json()) as { pod_ids: string[] }).pod_ids.sort()).toEqual(
       [inbox.pod_id, other.pod_id].sort()
     );
-    await emit(other);
+    await emit(otherInOrg);
     expect(await allDeliveries(hook.webhook_id)).toHaveLength(2);
 
     const bad = await app.request(
