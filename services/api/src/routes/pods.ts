@@ -129,6 +129,13 @@ pods.delete("/pods/:pod_id", async (c) => {
     throw new ApiError("conflict", "an organization must keep at least one pod");
   }
   const now = new Date().toISOString();
+  const inboxClientIds = (
+    await c.env.DB.prepare(
+      "SELECT client_id FROM inboxes WHERE pod_id = ? AND deleted_at IS NULL AND client_id IS NOT NULL"
+    )
+      .bind(pod.pod_id)
+      .all<{ client_id: string }>()
+  ).results.map((r) => r.client_id);
   await c.env.DB.batch([
     c.env.DB.prepare(
       "UPDATE inboxes SET deleted_at = ?, updated_at = ? WHERE pod_id = ? AND deleted_at IS NULL"
@@ -140,11 +147,7 @@ pods.delete("/pods/:pod_id", async (c) => {
     ).bind(now, auth.org_id, pod.pod_id, pod.pod_id),
     c.env.DB.prepare("UPDATE pods SET deleted_at = ? WHERE pod_id = ?").bind(now, pod.pod_id),
     releaseClientId(c.env.DB, auth.org_id, "pod", pod.client_id),
-    c.env.DB.prepare(
-      `DELETE FROM idempotency_keys
-       WHERE org_id = ? AND resource_type = 'inbox'
-         AND client_id IN (SELECT client_id FROM inboxes WHERE pod_id = ? AND client_id IS NOT NULL)`
-    ).bind(auth.org_id, pod.pod_id)
+    ...inboxClientIds.map((clientId) => releaseClientId(c.env.DB, auth.org_id, "inbox", clientId))
   ]);
   return c.body(null, 204);
 });
