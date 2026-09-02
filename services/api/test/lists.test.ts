@@ -389,3 +389,90 @@ describe("ingress enforcement", () => {
     expect(result).toEqual({ kind: "dsn", event: "message.complained" });
   });
 });
+
+describe("AgentMail-compatible receive/block aliases", () => {
+  it("adds, lists, and removes block entries by pattern and by id", async () => {
+    const inbox = await seedInbox({ address: `blk-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/lists/receive/block`;
+
+    const byPattern = await app.request(
+      base,
+      authed(key, { method: "POST", body: JSON.stringify({ pattern: "Spam@Example.com" }) }),
+      env
+    );
+    expect(byPattern.status).toBe(201);
+    const entry = (await byPattern.json()) as { entry_id: string; kind: string; pattern: string; inbox_id: string };
+    expect(entry.kind).toBe("block");
+    expect(entry.pattern).toBe("spam@example.com");
+    expect(entry.inbox_id).toBe(inbox.inbox_id);
+
+    const byDomain = await app.request(
+      base,
+      authed(key, { method: "POST", body: JSON.stringify({ domain: "junk.example" }) }),
+      env
+    );
+    expect(byDomain.status).toBe(201);
+    expect(((await byDomain.json()) as { pattern: string }).pattern).toBe("@junk.example");
+
+    const missing = await app.request(base, authed(key, { method: "POST", body: JSON.stringify({}) }), env);
+    expect(missing.status).toBe(400);
+
+    // Air's AgentMail body shape: { entry, reason } (reason is ignored).
+    const byEntry = await app.request(
+      base,
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({ entry: "Air@Example.com", reason: "blocked from People" })
+      }),
+      env
+    );
+    expect(byEntry.status).toBe(201);
+    expect(((await byEntry.json()) as { pattern: string }).pattern).toBe("air@example.com");
+    const dupe = await app.request(
+      base,
+      authed(key, { method: "POST", body: JSON.stringify({ entry: "air@example.com" }) }),
+      env
+    );
+    expect(dupe.status).toBe(409);
+    const delByEntry = await app.request(
+      `${base}/${encodeURIComponent("air@example.com")}`,
+      authed(key, { method: "DELETE" }),
+      env
+    );
+    expect(delByEntry.status).toBe(204);
+
+    const list = await app.request(base, authed(key), env);
+    const listed = (await list.json()) as { list_entries: { pattern: string; kind: string }[] };
+    expect(listed.list_entries.every((e) => e.kind === "block")).toBe(true);
+    expect(listed.list_entries.map((e) => e.pattern).sort()).toEqual(["@junk.example", "spam@example.com"]);
+
+    // native /lists still sees the same rows
+    const native = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/lists?kind=block`,
+      authed(key),
+      env
+    );
+    expect(((await native.json()) as { list_entries: unknown[] }).list_entries).toHaveLength(2);
+
+    const delByPattern = await app.request(
+      `${base}/${encodeURIComponent("spam@example.com")}`,
+      authed(key, { method: "DELETE" }),
+      env
+    );
+    expect(delByPattern.status).toBe(204);
+    const remaining = (await (await app.request(base, authed(key), env)).json()) as {
+      list_entries: { entry_id: string }[];
+    };
+    const delById = await app.request(
+      `${base}/${remaining.list_entries[0]!.entry_id}`,
+      authed(key, { method: "DELETE" }),
+      env
+    );
+    expect(delById.status).toBe(204);
+    const gone = await app.request(`${base}/${encodeURIComponent("nobody@example.com")}`, authed(key, { method: "DELETE" }), env);
+    expect(gone.status).toBe(404);
+    const empty = (await (await app.request(base, authed(key), env)).json()) as { list_entries: unknown[] };
+    expect(empty.list_entries).toHaveLength(0);
+  });
+});

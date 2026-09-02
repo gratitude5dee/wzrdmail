@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "wzrdmail",
+  "displayName": "wzrdmail",
+  "version": "0.1.0",
+  "description": "Email for AI agents. Create @wzrd.tech inboxes, send and receive mail, manage threads and drafts, and automate email workflows through the hosted wzrdmail MCP server.",
+  "author": {
+    "name": "wzrdmail",
+    "email": "support@wzrd.tech",
+    "url": "https://mail.wzrd.tech"
+  },
+  "homepage": "https://docs.mail.wzrd.tech",
+  "repository": "https://github.com/gratitude5dee/wzrdmail",
+  "license": "MIT",
+  "keywords": ["email", "inbox", "mcp", "ai-agent", "email-api", "wzrdmail"]
+}

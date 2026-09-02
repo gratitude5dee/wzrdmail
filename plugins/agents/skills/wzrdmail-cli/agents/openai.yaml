@@ -1,0 +1,6 @@
+interface:
+  display_name: "wzrdmail CLI"
+  short_description: "Operate wzrdmail from a shell"
+  default_prompt: "Use $wzrdmail-cli to run wzrdmail CLI commands for inboxes, mail, drafts, and webhooks."
+policy:
+  allow_implicit_invocation: true

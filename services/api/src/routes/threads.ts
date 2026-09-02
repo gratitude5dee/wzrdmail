@@ -52,6 +52,9 @@ async function listThreads(
   if (scope.inboxId) {
     conditions.push("inbox_id = ?");
     binds.push(scope.inboxId);
+  } else if (auth.inbox_id) {
+    conditions.push("inbox_id = ?");
+    binds.push(auth.inbox_id);
   } else if (auth.pod_id) {
     conditions.push("pod_id = ?");
     binds.push(auth.pod_id);
@@ -101,6 +104,9 @@ async function requireThread(
   }
   if (auth.pod_id && auth.pod_id !== row.pod_id) {
     throw new ApiError("forbidden", "key is scoped to a different pod");
+  }
+  if (auth.inbox_id && auth.inbox_id !== row.inbox_id) {
+    throw new ApiError("forbidden", "key is scoped to a different inbox");
   }
   return row;
 }

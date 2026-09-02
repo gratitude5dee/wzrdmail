@@ -12,6 +12,14 @@ description: How to run and test the wzrdmail Cloudflare Worker API locally with
 5. Email ingress (`src/ingress/email.ts`) is NOT reachable via HTTP in wrangler 3.x — POST to `/cdn-cgi/handler/email` returns the app's 404 (that route only exists in wrangler 4.x local email simulation). Test via unit tests or deployed Email Routing instead.
 6. Full checks: `pnpm check` at repo root (turbo typecheck+lint+test). Use `pnpm check --force` to bypass turbo cache. Note: turbo warns `no output files found for task @wzrdmail/core#build` (outputs key mismatch in turbo.json).
 
+## Quick org bootstrap without seeding
+
+`POST /v0/agent/sign-up {"username":"…","human_email":"x@example.com"}` (unauthenticated) returns `{api_key (admin), inbox_id, organization_id, pod_id}`. Locally there is no `THIRDWEB_CLIENT_ID`, so the OTP step is skipped and no external call is made. Use that admin key to mint scoped keys via `POST /v0/api-keys {name, inbox_id, permissions:["read","drafts"]}` or the CLI `keys create --inbox-id … --permissions read,drafts`.
+
+Docs worker: `npx wrangler dev --port 8789 --inspector-port 93xx` in `services/docs`; pages serve HTML, and raw markdown via `Accept: text/markdown` or a `.md` suffix. Its renderer (`src/markdown.ts`) only recognises ``` fences at column 0 — indented fences inside list items render as literal text, so check new pages visually.
+
+When running api + docs + mcp dev servers together, give each a unique `--inspector-port` (default 9229 collides and workerd exits).
+
 ## Seeding test data (local D1)
 
 - Seed via `npx wrangler d1 execute wzrdmail-dev --local --command "..."` from `services/api` — it shares state with a running dev server.

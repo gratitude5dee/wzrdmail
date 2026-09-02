@@ -115,6 +115,7 @@ export const Pod = z.object({
   pod_id: z.string(),
   name: z.string().optional(),
   organization_id: z.string().optional(),
+  client_id: z.string().nullable().optional(),
   created_at: IsoTimestamp
 });
 export type Pod = z.infer<typeof Pod>;
@@ -130,6 +131,8 @@ export const ApiKey = z.object({
   name: z.string().optional(),
   key: z.string().optional(),
   pod_id: z.string().nullable().optional(),
+  inbox_id: z.string().nullable().optional(),
+  permissions: z.array(z.string()).optional(),
   created_at: IsoTimestamp
 });
 export type ApiKey = z.infer<typeof ApiKey>;
@@ -137,6 +140,10 @@ export type ApiKey = z.infer<typeof ApiKey>;
 export interface CreateApiKeyInput {
   name?: string;
   pod_id?: string;
+  /** Pin the key to one inbox (implies that inbox's pod). */
+  inbox_id?: string;
+  /** Subset of the caller's permissions, e.g. ["read", "drafts"] for draft-only. */
+  permissions?: string[];
   client_id?: string;
 }
 

@@ -6,6 +6,8 @@ export interface AuthedKey {
   key_id: string;
   org_id: string;
   pod_id: string | null;
+  /** Set for inbox-scoped keys: the only inbox this key may touch. */
+  inbox_id: string | null;
   permissions: string;
   org_verified: boolean;
   human_email: string;
@@ -62,6 +64,7 @@ async function authenticateSession(
     key_id: row.session_id,
     org_id: row.org_id,
     pod_id: null,
+    inbox_id: null,
     permissions: "admin",
     org_verified: row.org_verified === 1,
     human_email: row.human_email
@@ -96,8 +99,10 @@ export async function authenticate(
   }
   const keyHash = await hashApiKey(key);
   const row = await c.env.DB.prepare(
-    `SELECT k.key_id, k.org_id, k.pod_id, k.permissions, o.verified AS org_verified, o.human_email
+    `SELECT k.key_id, k.org_id, COALESCE(i.pod_id, k.pod_id) AS pod_id, k.inbox_id, k.permissions,
+            o.verified AS org_verified, o.human_email
      FROM api_keys k JOIN organizations o ON o.org_id = k.org_id
+     LEFT JOIN inboxes i ON i.inbox_id = k.inbox_id
      WHERE k.key_hash = ? AND k.revoked_at IS NULL`
   )
     .bind(keyHash)
@@ -105,6 +110,7 @@ export async function authenticate(
       key_id: string;
       org_id: string;
       pod_id: string | null;
+      inbox_id: string | null;
       permissions: string;
       org_verified: number;
       human_email: string;
@@ -117,6 +123,7 @@ export async function authenticate(
     key_id: row.key_id,
     org_id: row.org_id,
     pod_id: row.pod_id,
+    inbox_id: row.inbox_id,
     permissions: row.permissions,
     org_verified: row.org_verified === 1,
     human_email: row.human_email

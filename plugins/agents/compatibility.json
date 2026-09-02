@@ -1,0 +1,9 @@
+{
+  "verifiedAt": "2026-09-02",
+  "wzrdmail": {
+    "typescript": "workspace (packages/sdk-ts)",
+    "python": "workspace (sdk-python)"
+  },
+  "cli": "workspace (apps/cli)",
+  "mcp": "https://mcp.mail.wzrd.tech/mcp"
+}

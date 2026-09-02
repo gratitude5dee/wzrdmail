@@ -73,16 +73,18 @@ function eventMatches(eventTypes: string, type: string): boolean {
  */
 export async function deliveryEnqueueStatements(
   db: D1Database,
-  event: { event_id: string; type: string; org_id: string; inbox_id?: string }
+  event: { event_id: string; type: string; org_id: string; pod_id: string; inbox_id?: string }
 ): Promise<D1PreparedStatement[]> {
   const hooks = (
     await db
       .prepare(
         `SELECT webhook_id, event_types FROM webhooks
          WHERE org_id = ? AND enabled = 1 AND deleted_at IS NULL
-           AND (inbox_id IS NULL OR inbox_id = ?)`
+           AND (inbox_id IS NULL OR inbox_id = ?)
+           AND (pod_ids = '[]' OR EXISTS (
+             SELECT 1 FROM json_each(webhooks.pod_ids) p WHERE p.value = ?))`
       )
-      .bind(event.org_id, event.inbox_id ?? null)
+      .bind(event.org_id, event.inbox_id ?? null, event.pod_id)
       .all<{ webhook_id: string; event_types: string }>()
   ).results.filter((h) => eventMatches(h.event_types, event.type));
   const now = new Date().toISOString();

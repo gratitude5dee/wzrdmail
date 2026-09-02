@@ -1,0 +1,35 @@
+{
+  "name": "wzrdmail",
+  "version": "0.1.0",
+  "description": "Email for AI agents. Create @wzrd.tech inboxes, send and receive mail, manage threads and drafts, and automate email workflows through the hosted wzrdmail MCP server.",
+  "author": {
+    "name": "wzrdmail",
+    "email": "support@wzrd.tech",
+    "url": "https://mail.wzrd.tech"
+  },
+  "homepage": "https://docs.mail.wzrd.tech",
+  "repository": "https://github.com/gratitude5dee/wzrdmail",
+  "license": "MIT",
+  "keywords": ["email", "inbox", "mcp", "ai-agent", "email-api", "wzrdmail"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "wzrdmail",
+    "shortDescription": "Email infrastructure for AI agents",
+    "longDescription": "Give your coding agent its own @wzrd.tech email inboxes. Create addresses on the fly, send and receive messages, manage threads, prepare drafts for human approval, handle attachments, and automate email workflows, all through natural language.",
+    "developerName": "wzrdmail",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://mail.wzrd.tech",
+    "privacyPolicyURL": "https://mail.wzrd.tech/legal/privacy",
+    "termsOfServiceURL": "https://mail.wzrd.tech/legal/terms",
+    "defaultPrompt": [
+      "Create a new project inbox and draft a welcome email.",
+      "Check my wzrdmail inbox for new messages and summarize unread threads.",
+      "Prepare a reply to the latest email in my inbox as a draft for review."
+    ],
+    "brandColor": "#7C3AED",
+    "composerIcon": "./assets/logo.svg",
+    "logo": "./assets/logo.svg"
+  }
+}

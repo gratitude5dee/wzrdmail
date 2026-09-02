@@ -36,7 +36,7 @@ const withCors = (response: Response): Response => {
 };
 
 /** Internal worker→DO route that reports whether a request's key matches the session's bound key. */
-export const VERIFY_SESSION_KEY_PATH = "/__verify-session-key";
+const VERIFY_SESSION_KEY_PATH = "/__verify-session-key";
 
 export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "wzrdmail", version: "0.0.1" });

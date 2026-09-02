@@ -478,3 +478,74 @@ describe("trash and folders", () => {
     expect(recentRow).not.toBeNull();
   });
 });
+
+describe("inbox-scoped draft-only keys", () => {
+  async function seedInboxKey(orgId: string, inboxId: string, permissions: string): Promise<string> {
+    const key = `wm_test_${crypto.randomUUID().replaceAll("-", "")}`;
+    await env.DB.prepare(
+      "INSERT INTO api_keys (key_id, org_id, pod_id, inbox_id, key_hash, key_prefix, permissions, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)"
+    )
+      .bind(`key_${crypto.randomUUID().slice(0, 8)}`, orgId, inboxId, await hashApiKey(key), key.slice(0, 12), permissions, NOW)
+      .run();
+    return key;
+  }
+
+  it("a read,drafts inbox key can draft but cannot send or reach other inboxes", async () => {
+    const inbox = await seedInbox({ address: `idk-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const sibling = await seedInbox({ address: `idk2-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    await env.DB.prepare("UPDATE inboxes SET org_id = ?, pod_id = ? WHERE inbox_id = ?")
+      .bind(inbox.org_id, inbox.pod_id, sibling.inbox_id)
+      .run();
+    const key = await seedInboxKey(inbox.org_id, inbox.inbox_id, "read,drafts");
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}`;
+
+    const created = await app.request(
+      `${base}/drafts`,
+      authed(key, { method: "POST", body: JSON.stringify({ to: ["dest@example.com"], text: "hi" }) }),
+      env
+    );
+    expect(created.status).toBe(201);
+    const draft = (await created.json()) as { draft_id: string };
+
+    const send = await app.request(
+      `${base}/drafts/${draft.draft_id}/send`,
+      authed(key, { method: "POST", body: JSON.stringify({}) }),
+      env
+    );
+    expect(send.status).toBe(403);
+
+    const direct = await app.request(
+      `${base}/messages/send`,
+      authed(key, { method: "POST", body: JSON.stringify({ to: ["dest@example.com"], text: "hi" }) }),
+      env
+    );
+    expect(direct.status).toBe(403);
+
+    const otherDraft = await app.request(
+      `/v0/inboxes/${encodeURIComponent(sibling.inbox_id)}/drafts`,
+      authed(key, { method: "POST", body: JSON.stringify({ to: ["dest@example.com"], text: "hi" }) }),
+      env
+    );
+    expect(otherDraft.status).toBe(403);
+    const otherList = await app.request(
+      `/v0/inboxes/${encodeURIComponent(sibling.inbox_id)}/messages`,
+      authed(key),
+      env
+    );
+    expect(otherList.status).toBe(403);
+
+    // Minting keys needs admin, so a draft-only key cannot escalate itself.
+    const mint = await app.request(
+      "/v0/api-keys",
+      authed(key, { method: "POST", body: JSON.stringify({ name: "up", permissions: ["send"] }) }),
+      env
+    );
+    expect(mint.status).toBe(403);
+    const hooks = await app.request(
+      "/v0/webhooks",
+      authed(key, { method: "POST", body: JSON.stringify({ url: "https://example.com/hook" }) }),
+      env
+    );
+    expect(hooks.status).toBe(403);
+  });
+});

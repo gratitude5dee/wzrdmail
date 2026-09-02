@@ -1,0 +1,6 @@
+interface:
+  display_name: "wzrdmail SDK"
+  short_description: "Build wzrdmail SDK integrations"
+  default_prompt: "Use $wzrdmail to implement a current wzrdmail SDK workflow."
+policy:
+  allow_implicit_invocation: true

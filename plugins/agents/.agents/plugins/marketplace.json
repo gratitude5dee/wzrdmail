@@ -1,0 +1,14 @@
+{
+  "name": "wzrdmail",
+  "interface": {
+    "displayName": "wzrdmail Plugins"
+  },
+  "plugins": [
+    {
+      "name": "wzrdmail",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

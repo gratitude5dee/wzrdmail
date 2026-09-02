@@ -118,10 +118,18 @@ export const SendMessageInput = z.object({
 });
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
 
+export const CreatePodInput = z.object({
+  name: z.string().min(1).max(128).optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreatePodInput = z.infer<typeof CreatePodInput>;
+
 export const CreateInboxInput = z.object({
   username: z.string().optional(),
   domain: z.string().optional(),
   display_name: z.string().optional(),
+  /** Place the inbox in a specific pod (defaults to the key's pod or the org's first pod). */
+  pod_id: z.string().optional(),
   client_id: z.string().max(256).optional()
 });
 export type CreateInboxInput = z.infer<typeof CreateInboxInput>;
@@ -271,6 +279,7 @@ export const Webhook = z.object({
   webhook_id: z.string(),
   organization_id: z.string(),
   inbox_id: InboxId.nullable().optional(),
+  pod_ids: z.array(z.string()).optional(),
   url: z.string().url(),
   secret: z.string().optional(),
   enabled: z.boolean(),
@@ -285,6 +294,8 @@ export const CreateWebhookInput = z.object({
   url: z.string().url(),
   event_types: z.array(z.string()).optional(),
   inbox_id: z.string().email().optional(),
+  /** Restrict delivery to events from these pods (AgentMail parity); omit for all. */
+  pod_ids: z.array(z.string().startsWith("pod_")).max(100).optional(),
   enabled: z.boolean().optional(),
   client_id: z.string().max(256).optional()
 });
@@ -293,6 +304,7 @@ export type CreateWebhookInput = z.infer<typeof CreateWebhookInput>;
 export const UpdateWebhookInput = z.object({
   url: z.string().url().optional(),
   event_types: z.array(z.string()).optional(),
+  pod_ids: z.array(z.string()).optional(),
   enabled: z.boolean().optional()
 });
 export type UpdateWebhookInput = z.infer<typeof UpdateWebhookInput>;

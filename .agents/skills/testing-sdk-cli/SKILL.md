@@ -29,6 +29,9 @@ Write a small Node `http` server implementing goal.md §7 shapes:
 
 ## MCP server (services/mcp)
 - Local dev: the pinned wrangler ^3.100 FAILS to start (`No such module "cloudflare-internal:email"` — the `agents` package imports `cloudflare:email`, unsupported by wrangler 3's miniflare). Use `npx -y wrangler@4 dev --port 8788` from services/mcp instead (or bump the devDependency to wrangler 4).
+- workerd rejects non-handler top-level exports from the entry module (`Incorrect type for map entry '…': the provided value is not of type 'function or ExportedHandler'`) — never `export const` plain values from `src/index.ts`.
+- The MCP worker can be driven against the real API worker (services/api on :8787, see testing-api-worker) instead of a mock — sign up an org via `POST /v0/agent/sign-up` and use its key.
+- Run several `wrangler dev` instances with distinct `--inspector-port` values (default 9229 collides and workerd dies with `Address already in use`).
 - `API_BASE_URL` dev var is http://localhost:8787 — run the mock §7 server there (`PORT=8787 node server.mjs`).
 - Endpoints: `/health` → `{ok:true}`; `/mcp` Streamable HTTP; auth via `x-api-key` header or `Authorization: Bearer` (missing key → HTTP 401 `{name,message}` envelope).
 - Drive it with a real client: node script importing `@modelcontextprotocol/sdk` `Client` + `StreamableHTTPClientTransport` (pass headers via `requestInit.headers`). The script file must live inside services/mcp (or otherwise resolve the sdk from its own path) — Node ESM resolves bare imports relative to the script file, not cwd.

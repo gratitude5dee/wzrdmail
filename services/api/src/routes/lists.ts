@@ -1,6 +1,7 @@
-import { ApiError, CreateListEntryInput, ListKind, newId } from "@wzrdmail/core";
+import { ApiError, CreateListEntryInput, ListKind, ListPattern, newId } from "@wzrdmail/core";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { z } from "zod";
 import { authenticate, requirePermission, type AuthedKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { collection, parseBody, parsePagination, requireInbox, withIdempotency } from "../lib/http.js";
@@ -44,18 +45,22 @@ async function requireEntry(
   if (auth.pod_id && row.inbox_id !== null && row.inbox_pod_id !== auth.pod_id) {
     throw new ApiError("forbidden", "key is scoped to a different pod");
   }
+  if (auth.inbox_id && row.inbox_id !== auth.inbox_id) {
+    throw new ApiError("forbidden", "key is scoped to a different inbox");
+  }
   return row;
 }
 
 async function listEntries(
   c: Context<{ Bindings: Env }>,
   auth: AuthedKey,
-  forcedInboxId?: string
+  forcedInboxId?: string,
+  forcedKind?: ListKind
 ): Promise<Response> {
   const { limit, cursor } = parsePagination(c);
   const conditions = ["org_id = ?"];
   const binds: string[] = [auth.org_id];
-  const kind = c.req.query("kind");
+  const kind = forcedKind ?? c.req.query("kind");
   if (kind !== undefined) {
     if (!ListKind.safeParse(kind).success) {
       throw new ApiError("validation_error", "kind must be 'allow' or 'block'");
@@ -63,7 +68,7 @@ async function listEntries(
     conditions.push("kind = ?");
     binds.push(kind);
   }
-  const inboxId = forcedInboxId ?? c.req.query("inbox_id");
+  const inboxId = forcedInboxId ?? c.req.query("inbox_id") ?? auth.inbox_id ?? undefined;
   if (inboxId !== undefined) {
     const inbox = await requireInbox(c, auth, inboxId);
     conditions.push("inbox_id = ?");
@@ -107,18 +112,31 @@ async function createEntry(
   } else {
     inboxId = (await requireInbox(c, auth, requestedInboxId)).inbox_id;
   }
+  return insertEntry(c, auth, {
+    inbox_id: inboxId,
+    kind: input.kind,
+    pattern: input.pattern,
+    client_id: input.client_id
+  });
+}
+
+async function insertEntry(
+  c: Context<{ Bindings: Env }>,
+  auth: AuthedKey,
+  entry: { inbox_id: string | null; kind: ListKind; pattern: string; client_id?: string }
+): Promise<Response> {
   const result = await withIdempotency(
     c.env.DB,
     auth.org_id,
     "list_entry",
-    input.client_id,
+    entry.client_id,
     async () => {
       const row: ListEntryRow = {
         entry_id: newId("lst"),
         org_id: auth.org_id,
-        inbox_id: inboxId,
-        kind: input.kind,
-        pattern: input.pattern,
+        inbox_id: entry.inbox_id,
+        kind: entry.kind,
+        pattern: entry.pattern,
         created_at: new Date().toISOString()
       };
       const inserted = await c.env.DB.prepare(
@@ -210,4 +228,64 @@ lists.delete("/inboxes/:inbox_id/lists/:entry_id", async (c) => {
   requirePermission(auth, "admin");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   return deleteEntry(c, auth, c.req.param("entry_id"), inbox.inbox_id);
+});
+
+// AgentMail-compatible aliases: `/inboxes/{id}/lists/receive/block` is the
+// inbox block list. POST takes `{ pattern }` (or AgentMail's `{ entry }` /
+// `{ address }` / `{ domain }`); DELETE takes an entry id or the raw pattern as the last
+// segment. Additive — the native `/lists` routes are unchanged.
+const BlockAliasInput = z.object({
+  pattern: z.string().optional(),
+  entry: z.string().optional(),
+  address: z.string().optional(),
+  domain: z.string().optional(),
+  client_id: z.string().max(256).optional()
+});
+
+lists.get("/inboxes/:inbox_id/lists/receive/block", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  return listEntries(c, auth, inbox.inbox_id, "block");
+});
+
+lists.post("/inboxes/:inbox_id/lists/receive/block", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const input = await parseBody(c, BlockAliasInput);
+  const raw =
+    input.pattern ??
+    input.entry ??
+    input.address ??
+    (input.domain !== undefined ? `@${input.domain.trim().replace(/^@/, "")}` : undefined);
+  const pattern = ListPattern.safeParse(raw);
+  if (!pattern.success) {
+    throw new ApiError("validation_error", "pattern (or entry/address/domain) is required");
+  }
+  return insertEntry(c, auth, {
+    inbox_id: inbox.inbox_id,
+    kind: "block",
+    pattern: pattern.data,
+    client_id: input.client_id
+  });
+});
+
+lists.delete("/inboxes/:inbox_id/lists/receive/block/:entry", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const entry = decodeURIComponent(c.req.param("entry"));
+  if (entry.startsWith("lst_")) {
+    return deleteEntry(c, auth, entry, inbox.inbox_id);
+  }
+  const pattern = ListPattern.safeParse(entry);
+  if (!pattern.success) throw new ApiError("not_found", "no such list entry");
+  const row = await c.env.DB.prepare(
+    `SELECT ${LIST_COLUMNS} FROM list_entries WHERE org_id = ? AND inbox_id = ? AND kind = 'block' AND pattern = ?`
+  )
+    .bind(auth.org_id, inbox.inbox_id, pattern.data)
+    .first<ListEntryRow>();
+  if (!row) throw new ApiError("not_found", "no such list entry");
+  return deleteEntry(c, auth, row.entry_id, inbox.inbox_id);
 });

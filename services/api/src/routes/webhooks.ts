@@ -27,7 +27,7 @@ import { webhookJson, type WebhookRow } from "../lib/serialize.js";
 export const webhooks = new Hono<{ Bindings: Env }>();
 
 const WEBHOOK_COLUMNS =
-  "webhook_id, org_id, inbox_id, url, secret, enabled, event_types, headers, client_id, created_at, updated_at";
+  "webhook_id, org_id, inbox_id, pod_ids, url, secret, enabled, event_types, headers, client_id, created_at, updated_at";
 
 function randomSecret(): string {
   const buf = new Uint8Array(24);
@@ -76,7 +76,8 @@ async function requireWebhook(
   if (
     !row ||
     row.org_id !== auth.org_id ||
-    (inboxId !== undefined && row.inbox_id !== inboxId)
+    (inboxId !== undefined && row.inbox_id !== inboxId) ||
+    (auth.inbox_id !== null && row.inbox_id !== auth.inbox_id)
   ) {
     throw new ApiError("not_found", "no such webhook");
   }
@@ -91,6 +92,12 @@ async function listWebhooks(
   const { limit, cursor } = parsePagination(c);
   const conditions = ["org_id = ?", "deleted_at IS NULL"];
   const binds: string[] = [auth.org_id];
+  if (auth.inbox_id) {
+    if (inboxId !== undefined && inboxId !== auth.inbox_id) {
+      throw new ApiError("not_found", "inbox not found");
+    }
+    inboxId = auth.inbox_id;
+  }
   if (inboxId !== undefined) {
     conditions.push("inbox_id = ?");
     binds.push(inboxId);
@@ -122,9 +129,13 @@ async function createWebhook(
   const input = await parseBody(c, CreateWebhookInput);
   assertSafeUrl(input.url, c.env.WZRDMAIL_ENV);
   const inboxId = forcedInboxId ?? input.inbox_id?.toLowerCase();
+  if (auth.inbox_id && inboxId === undefined) {
+    throw new ApiError("forbidden", "inbox-scoped keys can only create webhooks for their own inbox");
+  }
   if (inboxId !== undefined) {
     await requireInbox(c, auth, inboxId);
   }
+  const podIds = await validatePodIds(c, auth, input.pod_ids);
   const result = await withIdempotency(
     c.env.DB,
     auth.org_id,
@@ -137,6 +148,7 @@ async function createWebhook(
         webhook_id: webhookId,
         org_id: auth.org_id,
         inbox_id: inboxId ?? null,
+        pod_ids: JSON.stringify(podIds),
         url: input.url,
         secret: randomSecret(),
         enabled: input.enabled === false ? 0 : 1,
@@ -147,13 +159,14 @@ async function createWebhook(
         updated_at: now
       };
       await c.env.DB.prepare(
-        `INSERT INTO webhooks (webhook_id, org_id, inbox_id, url, secret, enabled, event_types, headers, client_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO webhooks (webhook_id, org_id, inbox_id, pod_ids, url, secret, enabled, event_types, headers, client_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           row.webhook_id,
           row.org_id,
           row.inbox_id,
+          row.pod_ids,
           row.url,
           row.secret,
           row.enabled,
@@ -168,6 +181,29 @@ async function createWebhook(
     }
   );
   return c.json(result, 201);
+}
+
+/** Dedupe and verify every pod is the caller's (pod-scoped keys: only their own). */
+async function validatePodIds(
+  c: Context<{ Bindings: Env }>,
+  auth: AuthedKey,
+  requested: string[] | undefined
+): Promise<string[]> {
+  const podIds = [...new Set(requested ?? [])];
+  if (podIds.length === 0) return podIds;
+  if (auth.pod_id && podIds.some((p) => p !== auth.pod_id)) {
+    throw new ApiError("forbidden", "pod-scoped keys can only subscribe to their own pod");
+  }
+  const known = (
+    await c.env.DB.prepare(
+      `SELECT pod_id FROM pods WHERE org_id = ? AND pod_id IN (${podIds.map(() => "?").join(",")})`
+    )
+      .bind(auth.org_id, ...podIds)
+      .all<{ pod_id: string }>()
+  ).results.map((r) => r.pod_id);
+  const missing = podIds.find((p) => !known.includes(p));
+  if (missing) throw new ApiError("not_found", `no such pod: ${missing}`);
+  return podIds;
 }
 
 async function updateWebhook(
@@ -185,12 +221,16 @@ async function updateWebhook(
     enabled: input.enabled === undefined ? row.enabled : input.enabled ? 1 : 0,
     event_types:
       input.event_types === undefined ? row.event_types : JSON.stringify(input.event_types),
+    pod_ids:
+      input.pod_ids === undefined
+        ? row.pod_ids
+        : JSON.stringify(await validatePodIds(c, auth, input.pod_ids)),
     updated_at: new Date().toISOString()
   };
   await c.env.DB.prepare(
-    "UPDATE webhooks SET url = ?, enabled = ?, event_types = ?, updated_at = ? WHERE webhook_id = ?"
+    "UPDATE webhooks SET url = ?, enabled = ?, event_types = ?, pod_ids = ?, updated_at = ? WHERE webhook_id = ?"
   )
-    .bind(next.url, next.enabled, next.event_types, next.updated_at, next.webhook_id)
+    .bind(next.url, next.enabled, next.event_types, next.pod_ids, next.updated_at, next.webhook_id)
     .run();
   return c.json(webhookJson(next));
 }

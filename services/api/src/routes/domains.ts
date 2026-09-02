@@ -283,7 +283,8 @@ domains.post("/domains/:domain_id/verify", async (c) => {
       const deliveryInserts = await deliveryEnqueueStatements(c.env.DB, {
         event_id: event.event_id,
         type: "domain.verified",
-        org_id: auth.org_id
+        org_id: auth.org_id,
+        pod_id: pod.pod_id
       });
       await c.env.DB.batch([guardedInsert, ...deliveryInserts, update]);
       try {
