@@ -112,7 +112,17 @@ export async function requireInbox(
   if (auth.pod_id && auth.pod_id !== inbox.pod_id) {
     throw new ApiError("forbidden", "key is scoped to a different pod");
   }
+  if (auth.inbox_id && auth.inbox_id !== inbox.inbox_id) {
+    throw new ApiError("forbidden", "key is scoped to a different inbox");
+  }
   return inbox;
+}
+
+/** Inbox-scoped keys may not touch pod- or org-level resources at all. */
+export function requireNotInboxScoped(auth: AuthedKey, what: string): void {
+  if (auth.inbox_id) {
+    throw new ApiError("forbidden", `${what} require a key that is not inbox-scoped`);
+  }
 }
 
 /** An in-flight reservation older than this is presumed dead and can be retried. */

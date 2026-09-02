@@ -271,6 +271,7 @@ export const Webhook = z.object({
   webhook_id: z.string(),
   organization_id: z.string(),
   inbox_id: InboxId.nullable().optional(),
+  pod_ids: z.array(z.string()).optional(),
   url: z.string().url(),
   secret: z.string().optional(),
   enabled: z.boolean(),
@@ -285,6 +286,8 @@ export const CreateWebhookInput = z.object({
   url: z.string().url(),
   event_types: z.array(z.string()).optional(),
   inbox_id: z.string().email().optional(),
+  /** Restrict delivery to events from these pods (AgentMail parity); omit for all. */
+  pod_ids: z.array(z.string().startsWith("pod_")).max(100).optional(),
   enabled: z.boolean().optional(),
   client_id: z.string().max(256).optional()
 });

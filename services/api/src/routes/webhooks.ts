@@ -27,7 +27,7 @@ import { webhookJson, type WebhookRow } from "../lib/serialize.js";
 export const webhooks = new Hono<{ Bindings: Env }>();
 
 const WEBHOOK_COLUMNS =
-  "webhook_id, org_id, inbox_id, url, secret, enabled, event_types, headers, client_id, created_at, updated_at";
+  "webhook_id, org_id, inbox_id, pod_ids, url, secret, enabled, event_types, headers, client_id, created_at, updated_at";
 
 function randomSecret(): string {
   const buf = new Uint8Array(24);
@@ -125,6 +125,21 @@ async function createWebhook(
   if (inboxId !== undefined) {
     await requireInbox(c, auth, inboxId);
   }
+  const podIds = [...new Set(input.pod_ids ?? [])];
+  if (podIds.length > 0) {
+    if (auth.pod_id && podIds.some((p) => p !== auth.pod_id)) {
+      throw new ApiError("forbidden", "pod-scoped keys can only subscribe to their own pod");
+    }
+    const known = (
+      await c.env.DB.prepare(
+        `SELECT pod_id FROM pods WHERE org_id = ? AND pod_id IN (${podIds.map(() => "?").join(",")})`
+      )
+        .bind(auth.org_id, ...podIds)
+        .all<{ pod_id: string }>()
+    ).results.map((r) => r.pod_id);
+    const missing = podIds.find((p) => !known.includes(p));
+    if (missing) throw new ApiError("not_found", `no such pod: ${missing}`);
+  }
   const result = await withIdempotency(
     c.env.DB,
     auth.org_id,
@@ -137,6 +152,7 @@ async function createWebhook(
         webhook_id: webhookId,
         org_id: auth.org_id,
         inbox_id: inboxId ?? null,
+        pod_ids: JSON.stringify(podIds),
         url: input.url,
         secret: randomSecret(),
         enabled: input.enabled === false ? 0 : 1,
@@ -147,13 +163,14 @@ async function createWebhook(
         updated_at: now
       };
       await c.env.DB.prepare(
-        `INSERT INTO webhooks (webhook_id, org_id, inbox_id, url, secret, enabled, event_types, headers, client_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO webhooks (webhook_id, org_id, inbox_id, pod_ids, url, secret, enabled, event_types, headers, client_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           row.webhook_id,
           row.org_id,
           row.inbox_id,
+          row.pod_ids,
           row.url,
           row.secret,
           row.enabled,

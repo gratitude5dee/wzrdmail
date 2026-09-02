@@ -778,3 +778,117 @@ describe("console signup", () => {
     expect(limited).toBe(true);
   });
 });
+
+describe("inbox-scoped api keys", () => {
+  async function seedInboxKey(orgId: string, inboxId: string, permissions = "admin"): Promise<string> {
+    const key = `wm_test_${crypto.randomUUID().replaceAll("-", "")}`;
+    await env.DB.prepare(
+      "INSERT INTO api_keys (key_id, org_id, pod_id, inbox_id, key_hash, key_prefix, permissions, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)"
+    )
+      .bind(`key_${crypto.randomUUID().slice(0, 8)}`, orgId, inboxId, await hashApiKey(key), key.slice(0, 12), permissions, NOW)
+      .run();
+    return key;
+  }
+
+  it("mints an inbox-scoped key that inherits the inbox's pod", async () => {
+    const seeded = await seedInbox({ address: `ik1-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const admin = await seedKey(seeded.org_id);
+    const res = await app.request(
+      "/v0/api-keys",
+      authed(admin, {
+        method: "POST",
+        body: JSON.stringify({ name: "box", inbox_id: seeded.inbox_id, permissions: ["read", "drafts"] })
+      }),
+      env
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { inbox_id: string; pod_id: string; api_key: string };
+    expect(body.inbox_id).toBe(seeded.inbox_id);
+    expect(body.pod_id).toBe(seeded.pod_id);
+
+    const list = await app.request("/v0/api-keys", authed(admin), env);
+    const listed = (await list.json()) as { api_keys: { inbox_id: string | null }[] };
+    expect(listed.api_keys.some((k) => k.inbox_id === seeded.inbox_id)).toBe(true);
+  });
+
+  it("rejects inbox_id from another org or a mismatched pod", async () => {
+    const seeded = await seedInbox({ address: `ik2-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const foreign = await seedInbox({ address: `ik3-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const admin = await seedKey(seeded.org_id);
+    const cross = await app.request(
+      "/v0/api-keys",
+      authed(admin, { method: "POST", body: JSON.stringify({ name: "x", inbox_id: foreign.inbox_id }) }),
+      env
+    );
+    expect(cross.status).toBe(404);
+    const mismatch = await app.request(
+      "/v0/api-keys",
+      authed(admin, {
+        method: "POST",
+        body: JSON.stringify({ name: "x", inbox_id: seeded.inbox_id, pod_id: foreign.pod_id })
+      }),
+      env
+    );
+    expect(mismatch.status).toBe(404);
+  });
+
+  it("an inbox-scoped key only sees and touches its own inbox", async () => {
+    const seeded = await seedInbox({ address: `ik4-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const sibling = await seedInbox({ address: `ik5-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    await env.DB.prepare("UPDATE inboxes SET org_id = ?, pod_id = ? WHERE inbox_id = ?")
+      .bind(seeded.org_id, seeded.pod_id, sibling.inbox_id)
+      .run();
+    const inboxKey = await seedInboxKey(seeded.org_id, seeded.inbox_id);
+
+    const list = await app.request("/v0/inboxes", authed(inboxKey), env);
+    const listed = (await list.json()) as { inboxes: { inbox_id: string }[] };
+    expect(listed.inboxes.map((i) => i.inbox_id)).toEqual([seeded.inbox_id]);
+
+    const own = await app.request(`/v0/inboxes/${encodeURIComponent(seeded.inbox_id)}`, authed(inboxKey), env);
+    expect(own.status).toBe(200);
+    const other = await app.request(`/v0/inboxes/${encodeURIComponent(sibling.inbox_id)}`, authed(inboxKey), env);
+    expect(other.status).toBe(403);
+    const otherThreads = await app.request(
+      `/v0/inboxes/${encodeURIComponent(sibling.inbox_id)}/threads`,
+      authed(inboxKey),
+      env
+    );
+    expect(otherThreads.status).toBe(403);
+
+    const create = await app.request(
+      "/v0/inboxes",
+      authed(inboxKey, { method: "POST", body: JSON.stringify({ username: "escape" }) }),
+      env
+    );
+    expect(create.status).toBe(403);
+    for (const path of ["/v0/usage", "/v0/domains"]) {
+      expect((await app.request(path, authed(inboxKey), env)).status).toBe(403);
+    }
+  });
+
+  it("an inbox-scoped key cannot mint a key for another inbox or widen scope", async () => {
+    const seeded = await seedInbox({ address: `ik6-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const sibling = await seedInbox({ address: `ik7-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    await env.DB.prepare("UPDATE inboxes SET org_id = ?, pod_id = ? WHERE inbox_id = ?")
+      .bind(seeded.org_id, seeded.pod_id, sibling.inbox_id)
+      .run();
+    const inboxKey = await seedInboxKey(seeded.org_id, seeded.inbox_id);
+
+    const widen = await app.request(
+      "/v0/api-keys",
+      authed(inboxKey, { method: "POST", body: JSON.stringify({ name: "widen", permissions: ["admin"] }) }),
+      env
+    );
+    expect(widen.status).toBe(201);
+    const widened = (await widen.json()) as { inbox_id: string | null; pod_id: string | null };
+    expect(widened.inbox_id).toBe(seeded.inbox_id);
+    expect(widened.pod_id).toBe(seeded.pod_id);
+
+    const cross = await app.request(
+      "/v0/api-keys",
+      authed(inboxKey, { method: "POST", body: JSON.stringify({ name: "cross", inbox_id: sibling.inbox_id }) }),
+      env
+    );
+    expect(cross.status).toBe(403);
+  });
+});

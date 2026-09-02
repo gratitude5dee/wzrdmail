@@ -16,6 +16,7 @@ import {
   parseBody,
   parsePagination,
   requireInbox,
+  requireNotInboxScoped,
   withIdempotency,
   type InboxRow
 } from "../lib/http.js";
@@ -48,6 +49,7 @@ inboxes.get("/inboxes", async (c) => {
        FROM inboxes
        WHERE org_id = ? AND deleted_at IS NULL
          AND (? IS NULL OR pod_id = ?)
+         AND (? IS NULL OR inbox_id = ?)
          AND (? IS NULL OR created_at > ? OR (created_at = ? AND inbox_id > ?))
        ORDER BY created_at, inbox_id LIMIT ?`
     )
@@ -55,6 +57,8 @@ inboxes.get("/inboxes", async (c) => {
         auth.org_id,
         auth.pod_id,
         auth.pod_id,
+        auth.inbox_id,
+        auth.inbox_id,
         cursor?.v ?? null,
         cursor?.v ?? null,
         cursor?.v ?? null,
@@ -70,6 +74,7 @@ inboxes.get("/inboxes", async (c) => {
 inboxes.post("/inboxes", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
+  requireNotInboxScoped(auth, "inbox creation");
   const input = await parseBody(c, CreateInboxInput);
 
   const domain = normalizeDomainName(input.domain ?? SHARED_DOMAIN);

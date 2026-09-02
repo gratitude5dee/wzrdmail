@@ -55,6 +55,7 @@ export interface WebhookRow {
   webhook_id: string;
   org_id: string;
   inbox_id: string | null;
+  pod_ids: string;
   url: string;
   secret: string;
   enabled: number;
@@ -216,6 +217,7 @@ export function webhookJson(
     webhook_id: row.webhook_id,
     organization_id: row.org_id,
     inbox_id: row.inbox_id,
+    pod_ids: jsonArray(row.pod_ids),
     url: row.url,
     ...(options?.includeSecret ? { secret: row.secret } : {}),
     enabled: row.enabled === 1,

@@ -80,9 +80,12 @@ export async function deliveryEnqueueStatements(
       .prepare(
         `SELECT webhook_id, event_types FROM webhooks
          WHERE org_id = ? AND enabled = 1 AND deleted_at IS NULL
-           AND (inbox_id IS NULL OR inbox_id = ?)`
+           AND (inbox_id IS NULL OR inbox_id = ?)
+           AND (pod_ids = '[]' OR EXISTS (
+             SELECT 1 FROM inboxes i, json_each(webhooks.pod_ids) p
+             WHERE i.inbox_id = ? AND i.pod_id = p.value))`
       )
-      .bind(event.org_id, event.inbox_id ?? null)
+      .bind(event.org_id, event.inbox_id ?? null, event.inbox_id ?? null)
       .all<{ webhook_id: string; event_types: string }>()
   ).results.filter((h) => eventMatches(h.event_types, event.type));
   const now = new Date().toISOString();

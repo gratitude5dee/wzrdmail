@@ -643,3 +643,51 @@ describe("webhook CRUD (§M2)", () => {
     }
   });
 });
+
+describe("webhook pod_ids (AgentMail parity)", () => {
+  it("accepts pod_ids + client_id, persists them, and rejects foreign pods", async () => {
+    const inbox = await seedInbox({ address: `whp-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const foreign = await seedInbox({ address: `whp2-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+
+    const created = await app.request(
+      "/v0/webhooks",
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({
+          url: "https://example.com/hook",
+          pod_ids: [inbox.pod_id, inbox.pod_id],
+          client_id: `air-${crypto.randomUUID().slice(0, 6)}`
+        })
+      }),
+      env
+    );
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { webhook_id: string; pod_ids: string[] };
+    expect(body.pod_ids).toEqual([inbox.pod_id]);
+
+    const fetched = await app.request(`/v0/webhooks/${body.webhook_id}`, authed(key), env);
+    expect(((await fetched.json()) as { pod_ids: string[] }).pod_ids).toEqual([inbox.pod_id]);
+
+    const bad = await app.request(
+      "/v0/webhooks",
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({ url: "https://example.com/hook", pod_ids: [foreign.pod_id] })
+      }),
+      env
+    );
+    expect(bad.status).toBe(404);
+
+    const podKey = await seedKey(inbox.org_id, { podId: inbox.pod_id });
+    const otherPod = await app.request(
+      "/v0/webhooks",
+      authed(podKey, {
+        method: "POST",
+        body: JSON.stringify({ url: "https://example.com/hook", pod_ids: [foreign.pod_id] })
+      }),
+      env
+    );
+    expect(otherPod.status).toBe(403);
+  });
+});
