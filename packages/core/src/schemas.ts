@@ -304,6 +304,7 @@ export type CreateWebhookInput = z.infer<typeof CreateWebhookInput>;
 export const UpdateWebhookInput = z.object({
   url: z.string().url().optional(),
   event_types: z.array(z.string()).optional(),
+  pod_ids: z.array(z.string()).optional(),
   enabled: z.boolean().optional()
 });
 export type UpdateWebhookInput = z.infer<typeof UpdateWebhookInput>;

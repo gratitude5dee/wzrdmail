@@ -359,5 +359,25 @@ describe("pod_ids delivery filter", () => {
     await emit(inbox);
     expect(await allDeliveries(hook.webhook_id)).toHaveLength(1);
     await processDueDeliveries(env);
+
+    // PATCH pod_ids widens the subscription (Air appends new pods to its one webhook).
+    const patched = await app.request(
+      `/v0/webhooks/${hook.webhook_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ pod_ids: [inbox.pod_id, other.pod_id] }) }),
+      env
+    );
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { pod_ids: string[] }).pod_ids.sort()).toEqual(
+      [inbox.pod_id, other.pod_id].sort()
+    );
+    await emit(other);
+    expect(await allDeliveries(hook.webhook_id)).toHaveLength(2);
+
+    const bad = await app.request(
+      `/v0/webhooks/${hook.webhook_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ pod_ids: ["pod_nope"] }) }),
+      env
+    );
+    expect(bad.status).toBe(404);
   });
 });
