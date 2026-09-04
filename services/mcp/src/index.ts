@@ -51,6 +51,9 @@ export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    // On a cold start `this.props` is empty until onStart() reloads it from
+    // storage; guarding before that would 401 every evicted-then-reused session.
+    await this.__unsafe_ensureInitialized();
     const url = new URL(request.url);
     if (url.pathname === VERIFY_SESSION_KEY_PATH) {
       return (
