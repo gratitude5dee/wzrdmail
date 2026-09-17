@@ -15,6 +15,9 @@ export default defineWorkersConfig(async () => {
     fixtures[file] = await readFile(path.join(FIXTURES_DIR, file), "utf8");
   }
   return {
+    // The API test suite has no CSS. Pin an empty PostCSS config so Vite does
+    // not walk above the repository and load an unrelated host-level config.
+    css: { postcss: { plugins: [] } },
     test: {
       setupFiles: ["./test/apply-migrations.ts"],
       poolOptions: {

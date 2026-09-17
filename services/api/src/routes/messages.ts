@@ -243,10 +243,26 @@ messages.get("/inboxes/:inbox_id/messages/:msg_id/attachments/:att_id", async (c
   if (!att) throw new ApiError("not_found", "no such attachment");
   const object = await c.env.MAIL.get(`att/${inbox.inbox_id}/${row.msg_id}/${att.att_id}`);
   if (!object) throw new ApiError("not_found", "attachment content is not stored");
+  // Mail readers need CID-backed raster image parts to render in place. Keep
+  // every other attachment as a download: serving sender-provided HTML or SVG
+  // inline would give it the API origin when opened in a browser.
+  const mediaType = att.content_type.split(";", 1)[0]?.trim().toLowerCase();
+  const inlineImageTypes = new Set([
+    "image/avif",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+  ]);
+  const disposition =
+    c.req.query("disposition") === "inline" && inlineImageTypes.has(mediaType ?? "")
+      ? "inline"
+      : "attachment";
   return new Response(object.body, {
     headers: {
       "Content-Type": att.content_type,
-      "Content-Disposition": `attachment; filename="${att.filename.replaceAll('"', "")}"`
+      "Content-Disposition": `${disposition}; filename="${att.filename.replaceAll('"', "")}"`,
+      "X-Content-Type-Options": "nosniff"
     }
   });
 });
