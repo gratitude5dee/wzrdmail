@@ -86,6 +86,8 @@ export interface Attachment {
   filename: string;
   content_type: string;
   size: number;
+  /** The MIME Content-ID used by inline HTML images (`cid:...`). */
+  content_id?: string | null;
 }
 
 export interface Message {
@@ -99,6 +101,7 @@ export interface Message {
   cc: string[];
   subject: string;
   text: string | null;
+  html: string | null;
   extracted_text: string | null;
   extracted_html: string | null;
   labels: string[];

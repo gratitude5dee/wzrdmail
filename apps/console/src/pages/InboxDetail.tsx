@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { ApiRequestError, api, apiAll, type Draft, type Message, type Thread } from "../api";
+import {
+  API_BASE,
+  ApiRequestError,
+  api,
+  apiAll,
+  type Attachment,
+  type Draft,
+  type Message,
+  type Thread
+} from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const FOLDERS = ["Inbox", "Sent", "Drafts", "Scheduled", "All Mail", "Trash"] as const;
@@ -450,8 +459,109 @@ function ThreadView({ inboxId, unified }: { inboxId: string; unified: boolean })
   );
 }
 
+/** Strip brackets and normalise case before matching MIME `cid:` references. */
+function contentId(value: string | null | undefined): string | null {
+  const normalized = value?.trim().replace(/^<|>$/g, "").toLowerCase();
+  return normalized || null;
+}
+
+function attachmentUrl(
+  message: Message,
+  attachment: Attachment,
+  inline = false
+): string {
+  const path = `${API_BASE}/inboxes/${encodeURIComponent(message.inbox_id)}/messages/${encodeURIComponent(message.message_id)}/attachments/${encodeURIComponent(attachment.attachment_id)}`;
+  return inline ? `${path}?disposition=inline` : path;
+}
+
+/**
+ * E-mail HTML is untrusted. It lives in an opaque-origin iframe with scripts,
+ * forms, navigation, and parent access disabled. Its CSP permits only inline
+ * styles, embedded data images, this message's authenticated CID attachments,
+ * and (after an explicit reader action) remote HTTP(S) images.
+ */
+function emailDocument(message: Message, allowRemoteImages: boolean): string {
+  const cidAttachments = new Map<string, Attachment>();
+  for (const attachment of message.attachments) {
+    const id = contentId(attachment.content_id);
+    if (id) cidAttachments.set(id, attachment);
+  }
+  const html = (message.html ?? message.extracted_html ?? "").replace(
+    /\bcid:([^\s"'>]+)/gi,
+    (reference, rawId: string) => {
+      const attachment = cidAttachments.get(contentId(rawId) ?? "");
+      return attachment ? attachmentUrl(message, attachment, true) : reference;
+    }
+  );
+  const apiOrigin = new URL(API_BASE).origin;
+  const imageSources = ["data:", apiOrigin, ...(allowRemoteImages ? ["https:", "http:"] : [])];
+  const csp = [
+    "default-src 'none'",
+    `img-src ${imageSources.join(" ")}`,
+    "style-src 'unsafe-inline'",
+    "font-src data:",
+    "media-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
+  ].join("; ");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>html,body{margin:0;max-width:100%;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%!important}pre{white-space:pre-wrap}</style></head><body>${html}</body></html>`;
+}
+
+function MessageBody({ message }: { message: Message }) {
+  const hasHtml = Boolean(message.html ?? message.extracted_html);
+  const text = message.extracted_text ?? message.text ?? "";
+  const [view, setView] = useState<"rendered" | "text">(hasHtml ? "rendered" : "text");
+  const [allowRemoteImages, setAllowRemoteImages] = useState(false);
+
+  if (!hasHtml) {
+    return <div className="body">{text || <span className="dim">(no readable message body)</span>}</div>;
+  }
+
+  return (
+    <div className="message-body">
+      <div className="message-body-actions">
+        <button
+          className={`btn sm${view === "rendered" ? " primary" : ""}`}
+          type="button"
+          onClick={() => setView("rendered")}
+        >
+          Rendered email
+        </button>
+        <button
+          className={`btn sm${view === "text" ? " primary" : ""}`}
+          type="button"
+          onClick={() => setView("text")}
+        >
+          Text version
+        </button>
+        {view === "rendered" && !allowRemoteImages && (
+          <button className="btn sm" type="button" onClick={() => setAllowRemoteImages(true)}>
+            Load remote images
+          </button>
+        )}
+      </div>
+      {view === "rendered" ? (
+        <iframe
+          className="email-frame"
+          title={`Rendered email: ${message.subject || "no subject"}`}
+          sandbox=""
+          referrerPolicy="no-referrer"
+          srcDoc={emailDocument(message, allowRemoteImages)}
+        />
+      ) : (
+        <div className="body">{text || <span className="dim">(no text version)</span>}</div>
+      )}
+      {view === "rendered" && !allowRemoteImages && (
+        <p className="dim message-image-note">
+          Inline images are shown. Remote images stay blocked until you choose to load them.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function MessageCard({ message }: { message: Message }) {
-  const body = message.extracted_text ?? message.text ?? "";
   return (
     <div className="msg">
       <div className="head">
@@ -463,13 +573,20 @@ function MessageCard({ message }: { message: Message }) {
           {new Date(message.created_at).toLocaleString()}
         </span>
       </div>
-      <div className="body">{body || <span className="dim">(no text body)</span>}</div>
+      <MessageBody message={message} />
       {message.attachments.length > 0 && (
         <div style={{ marginTop: 8 }}>
           {message.attachments.map((a) => (
-            <span key={a.attachment_id} className="chip" style={{ marginRight: 6 }}>
+            <a
+              key={a.attachment_id}
+              className="chip"
+              style={{ marginRight: 6 }}
+              href={attachmentUrl(message, a)}
+              target="_blank"
+              rel="noreferrer"
+            >
               📎 {a.filename} ({Math.ceil(a.size / 1024)} KB)
-            </span>
+            </a>
           ))}
         </div>
       )}

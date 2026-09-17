@@ -405,6 +405,31 @@ describe("message endpoints (§M2)", () => {
     expect(await res.text()).toContain("raw body");
   });
 
+  it("serves CID attachments inline only when the reader explicitly asks", async () => {
+    const inbox = await seedInbox({ address: `att-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const msg = await seedMessage(inbox);
+    const attachmentId = `att_${crypto.randomUUID().slice(0, 12)}`;
+    await env.MAIL.put(`att/${inbox.inbox_id}/${msg.msg_id}/${attachmentId}`, "png bytes");
+    await env.DB.prepare(
+      `INSERT INTO attachments (att_id, msg_id, inbox_id, filename, content_type, size, created_at)
+       VALUES (?, ?, ?, 'inline.png', 'image/png', 9, ?)`
+    )
+      .bind(attachmentId, msg.msg_id, inbox.inbox_id, NOW)
+      .run();
+    const url = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/${msg.msg_id}/attachments/${attachmentId}`;
+
+    const download = await app.request(url, authed(key), env);
+    expect(download.headers.get("Content-Disposition")).toContain("attachment");
+
+    const inline = await app.request(`${url}?disposition=inline`, authed(key), env);
+    expect(inline.status).toBe(200);
+    expect(inline.headers.get("Content-Type")).toContain("image/png");
+    expect(inline.headers.get("Content-Disposition")).toContain("inline");
+    expect(inline.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(await inline.text()).toBe("png bytes");
+  });
+
   it("patches labels and batch-updates", async () => {
     const inbox = await seedInbox({ address: `lbl-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
     const key = await seedKey(inbox.org_id);
