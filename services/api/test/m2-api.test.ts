@@ -421,6 +421,7 @@ describe("message endpoints (§M2)", () => {
 
     const download = await app.request(url, authed(key), env);
     expect(download.headers.get("Content-Disposition")).toContain("attachment");
+    expect(await download.text()).toBe("png bytes");
 
     const inline = await app.request(`${url}?disposition=inline`, authed(key), env);
     expect(inline.status).toBe(200);
