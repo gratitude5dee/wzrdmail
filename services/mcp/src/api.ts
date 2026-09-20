@@ -18,15 +18,23 @@ export class ApiClient {
   private readonly apiKey: string | (() => string);
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
+  private readonly timeoutMs: number | undefined;
 
   constructor(options: {
     apiKey: string | (() => string);
     baseUrl: string;
     fetchImpl?: FetchLike;
+    /**
+     * Abort an upstream call after this many ms. The JSON lane sets it so a
+     * hung API turns into a tool error well inside a consumer agent's own
+     * request ceiling (muse.md §4.4) instead of stalling the whole turn.
+     */
+    timeoutMs?: number;
   }) {
     this.apiKey = options.apiKey;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.timeoutMs = options.timeoutMs;
   }
 
   async request(req: ApiRequest): Promise<unknown> {
@@ -43,11 +51,23 @@ export class ApiClient {
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(req.body);
     }
-    const response = await this.fetchImpl(url.toString(), {
-      method: req.method,
-      headers,
-      body
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url.toString(), {
+        method: req.method,
+        headers,
+        body,
+        signal: this.timeoutMs === undefined ? undefined : AbortSignal.timeout(this.timeoutMs)
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new WzrdmailError(504, {
+          name: "internal_error",
+          message: `wzrdmail API did not answer within ${String(this.timeoutMs)}ms`
+        });
+      }
+      throw error;
+    }
     const text = await response.text();
     let data: unknown = undefined;
     if (text !== "") {

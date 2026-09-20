@@ -59,7 +59,9 @@ const EXPECTED_TOOLS = [
   "list_webhooks",
   "create_webhook",
   "list_domains",
-  "get_usage"
+  "get_usage",
+  "whoami",
+  "check_new_mail"
 ];
 
 describe("wzrdmail MCP server", () => {

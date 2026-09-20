@@ -54,8 +54,8 @@ describe("worker entry", () => {
   });
 });
 
-describe("streamable-http lane (pinned pre-change behaviour)", () => {
-  it("answers initialize with an SSE body and a session id", async () => {
+describe("streaming lane", () => {
+  it("still answers a both-Accept initialize with SSE and a session id", async () => {
     const res = await SELF.fetch(MCP, {
       method: "POST",
       headers: {
@@ -70,10 +70,26 @@ describe("streamable-http lane (pinned pre-change behaviour)", () => {
     expect(res.headers.get("mcp-session-id")).toBeTruthy();
     const body = await res.text();
     expect(body).toContain('"protocolVersion":"2025-06-18"');
-    expect(body).toContain('"name":"wzrdmail"');
   });
 
-  it("406s a POST whose Accept omits text/event-stream", async () => {
+  it("routes a both-Accept POST to JSON when the escape-hatch header is set", async () => {
+    const res = await SELF.fetch(MCP, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-response-mode": "json",
+        "x-api-key": KEY
+      },
+      body: initialize()
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+  });
+});
+
+describe("json lane", () => {
+  it("answers initialize as JSON with no session id when Accept omits event-stream", async () => {
     const res = await SELF.fetch(MCP, {
       method: "POST",
       headers: {
@@ -83,15 +99,64 @@ describe("streamable-http lane (pinned pre-change behaviour)", () => {
       },
       body: initialize()
     });
-    expect(res.status).toBe(406);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+    const body = (await res.json()) as {
+      result: { protocolVersion: string; serverInfo: { name: string } };
+    };
+    expect(body.result.protocolVersion).toBe("2025-06-18");
+    expect(body.result.serverInfo.name).toBe("wzrdmail");
   });
 
-  it("406s a POST with no Accept header at all", async () => {
+  it("answers initialize as JSON when there is no Accept header at all", async () => {
     const res = await SELF.fetch(MCP, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": KEY },
       body: initialize()
     });
-    expect(res.status).toBe(406);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+  });
+
+  it("lists the full toolset without a prior initialize or a session id", async () => {
+    const res = await SELF.fetch(MCP, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "x-api-key": KEY
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result: { tools: { name: string; annotations?: unknown }[] } };
+    const names = body.result.tools.map((t) => t.name);
+    expect(names).toHaveLength(24);
+    expect(names).toContain("whoami");
+    expect(names).toContain("check_new_mail");
+  });
+
+  it("carries annotations so a consumer agent knows what is destructive", async () => {
+    const res = await SELF.fetch(MCP, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "x-api-key": KEY
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} })
+    });
+    const body = (await res.json()) as {
+      result: { tools: { name: string; annotations?: Record<string, unknown> }[] };
+    };
+    const byName = new Map(body.result.tools.map((t) => [t.name, t.annotations]));
+    expect(byName.get("list_inboxes")).toMatchObject({ readOnlyHint: true });
+    expect(byName.get("send_message")).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true
+    });
   });
 });

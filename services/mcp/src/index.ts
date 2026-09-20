@@ -2,13 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { ApiClient } from "./api.js";
 import { extractApiKey, sessionKeyGuard } from "./auth.js";
+import type { Env } from "./env.js";
+import { handleJsonLane } from "./json-lane.js";
+import type { Principal } from "./principal.js";
 import { registerResources } from "./resources.js";
 import { registerTools } from "./tools.js";
 
-interface Env {
-  API_BASE_URL: string;
-  MCP_OBJECT: DurableObjectNamespace;
-}
+export type { Env };
 
 interface Props extends Record<string, unknown> {
   apiKey: string;
@@ -18,8 +18,8 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, x-api-key, mcp-session-id, mcp-protocol-version, last-event-id",
-  "Access-Control-Expose-Headers": "mcp-session-id",
+    "Content-Type, Authorization, x-api-key, mcp-session-id, mcp-protocol-version, last-event-id, mcp-response-mode",
+  "Access-Control-Expose-Headers": "mcp-session-id, WWW-Authenticate",
   "Access-Control-Max-Age": "86400"
 };
 
@@ -66,6 +66,68 @@ export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
   }
 }
 
+/**
+ * Which transport lane serves this request (muse.md §4.3).
+ *
+ * The streaming lane is the Durable Object one that shipped first; the JSON
+ * lane is stateless and answers in a plain body. The rules are ordered so no
+ * client that works today can be moved off the lane it already uses:
+ *
+ *  1. Anything that is not a POST keeps the streaming lane's GET/DELETE
+ *     semantics unchanged.
+ *  2. An OAuth connection always gets JSON. Hosted consumer agents arrive that
+ *     way and will not hold a stream, whatever they put in Accept.
+ *  3. A POST whose Accept omits text/event-stream gets JSON — the streaming
+ *     lane answers exactly that shape with a 406 today, so nothing can be
+ *     relying on it.
+ *  4. An explicit opt-in header gets JSON, for key clients that can reach the
+ *     server but not parse a stream.
+ *  5. Everything else keeps streaming: the editors and CLIs already connected.
+ */
+export const selectLane = (request: Request, principal: Principal): "json" | "streaming" => {
+  if (request.method !== "POST") return "streaming";
+  if (principal.kind === "oauth") return "json";
+  const accept = request.headers.get("accept") ?? "";
+  if (!accept.includes("text/event-stream")) return "json";
+  if (request.headers.get("mcp-response-mode")?.trim().toLowerCase() === "json") return "json";
+  return "streaming";
+};
+
+const unauthorized = (): Response =>
+  Response.json(
+    { name: "unauthorized", message: "provide x-api-key or Authorization: Bearer wm_…" },
+    { status: 401 }
+  );
+
+/** Serves one MCP request on whichever lane suits the caller. */
+export async function serveMcp(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  principal: Principal
+): Promise<Response> {
+  if (selectLane(request, principal) === "json") {
+    return withCors(await handleJsonLane(request, env, ctx, principal));
+  }
+  // The streamable-HTTP bridge turns any non-WebSocket DO response into a
+  // generic 500, so session-key mismatches must be rejected here, before the
+  // bridge opens — by asking the named session's DO to compare keys directly.
+  const sessionId = request.headers.get("mcp-session-id");
+  if (sessionId !== null) {
+    const stub = env.MCP_OBJECT.get(
+      env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)
+    );
+    const verification = await stub.fetch(
+      new Request(`https://mcp.internal${VERIFY_SESSION_KEY_PATH}`, {
+        headers: request.headers
+      })
+    );
+    if (verification.status !== 200) return withCors(verification);
+  }
+  (ctx as { props?: Props }).props = { apiKey: principal.apiKey };
+  return withCors(await WzrdmailMcp.serve("/mcp").fetch(request, env, ctx));
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -83,34 +145,8 @@ export default {
         )
       );
     }
-    // OAuth 2.1 mode (workers-oauth-provider) lands with the console; until
-    // then only x-api-key / Bearer clients are accepted.
     const apiKey = extractApiKey(request);
-    if (apiKey === null) {
-      return withCors(
-        Response.json(
-          { name: "unauthorized", message: "provide x-api-key or Authorization: Bearer wm_…" },
-          { status: 401 }
-        )
-      );
-    }
-    // The streamable-HTTP bridge turns any non-WebSocket DO response into a
-    // generic 500, so session-key mismatches must be rejected here, before the
-    // bridge opens — by asking the named session's DO to compare keys directly.
-    const sessionId = request.headers.get("mcp-session-id");
-    if (sessionId !== null) {
-      const stub = env.MCP_OBJECT.get(
-        env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)
-      );
-      const verification = await stub.fetch(
-        new Request(`https://mcp.internal${VERIFY_SESSION_KEY_PATH}`, {
-          headers: request.headers
-        })
-      );
-      if (verification.status !== 200) return withCors(verification);
-    }
-    (ctx as { props?: Props }).props = { apiKey };
-    const response = await WzrdmailMcp.serve("/mcp").fetch(request, env, ctx);
-    return withCors(response);
+    if (apiKey === null) return withCors(unauthorized());
+    return serveMcp(request, env, ctx, { kind: "api_key", apiKey });
   }
 };
