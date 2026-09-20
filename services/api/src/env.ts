@@ -8,4 +8,10 @@ export interface Env {
   EMAIL?: SendEmail;
   /** thirdweb project client id; when set, email OTPs go through thirdweb auth. */
   THIRDWEB_CLIENT_ID?: string;
+  /**
+   * Shared secret the MCP Worker presents on /v0/connect/* (muse.md §7.1).
+   * Until it is provisioned those routes answer 404, so the API can ship
+   * before the connector exists.
+   */
+  CONNECT_SECRET?: string;
 }

@@ -493,6 +493,44 @@ describe("message endpoints (§M2)", () => {
     expect(((await unread.json()) as { labels: string[] }).labels).toContain("unread");
   });
 
+  // muse.md §6.4 / ADR-0004: label and read-state PATCHes need only "read", so
+  // a connector key can keep its own mailbox tidy. Delete and restore stay admin.
+  it("lets a read-only key patch labels and read state but not delete", async () => {
+    const inbox = await seedInbox({ address: `ro-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id, { permissions: "read" });
+    const msg = await seedMessage(inbox, { labels: ["unread"] });
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}`;
+
+    const read = await app.request(
+      `${base}/messages/${msg.msg_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ read: true, add_labels: ["seen"] }) }),
+      env
+    );
+    expect(read.status).toBe(200);
+    const patched = (await read.json()) as { labels: string[] };
+    expect(patched.labels).toContain("seen");
+    expect(patched.labels).not.toContain("unread");
+
+    const thread = await app.request(
+      `${base}/threads/${msg.thread_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ add_labels: ["starred"] }) }),
+      env
+    );
+    expect(thread.status).toBe(200);
+    expect(((await thread.json()) as { labels: string[] }).labels).toContain("starred");
+
+    for (const path of [`${base}/messages/${msg.msg_id}`, `${base}/threads/${msg.thread_id}`]) {
+      const removed = await app.request(path, authed(key, { method: "DELETE" }), env);
+      expect(removed.status).toBe(403);
+    }
+    const restored = await app.request(
+      `${base}/messages/${msg.msg_id}/restore`,
+      authed(key, { method: "POST" }),
+      env
+    );
+    expect(restored.status).toBe(403);
+  });
+
   it("blocks cross-org message reads", async () => {
     const mine = await seedInbox({ address: `xm-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
     const theirs = await seedInbox({ address: `xt-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });

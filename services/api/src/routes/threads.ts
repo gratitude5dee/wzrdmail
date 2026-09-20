@@ -172,9 +172,11 @@ threads.get("/inboxes/:inbox_id/threads/:thread_id", async (c) => {
   return threadDetail(c, thread);
 });
 
+// Labels are ordinary mailbox hygiene, so a read-only key may set them
+// (muse.md §6.4 / ADR-0004). Delete and restore stay admin.
 threads.patch("/inboxes/:inbox_id/threads/:thread_id", async (c) => {
   const auth = await authenticate(c);
-  requirePermission(auth, "admin");
+  requirePermission(auth, "read");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const thread = await requireThread(c, auth, c.req.param("thread_id"), inbox.inbox_id);
   const input = await parseBody(c, UpdateThreadInput);

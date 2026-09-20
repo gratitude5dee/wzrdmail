@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { authenticate, hashApiKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { parseBody } from "../lib/http.js";
+import { directIp, throttle } from "../lib/ratelimit.js";
 import {
   OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_MS,
@@ -26,7 +27,18 @@ function randomToken(bytes: number): string {
   return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** An unauthenticated sign-up creates a real org, key, and inbox (muse.md §7.2). */
+const SIGNUP_IP_LIMIT = 5;
+const SIGNUP_IP_WINDOW_SECONDS = 3600;
+
 agent.post("/agent/sign-up", async (c) => {
+  await throttle(
+    c,
+    `agent_signup_rate:${directIp(c)}`,
+    SIGNUP_IP_LIMIT,
+    SIGNUP_IP_WINDOW_SECONDS,
+    "too many sign-up attempts; try again later"
+  );
   const input = await parseBody(c, AgentSignUpInput);
   const humanEmail = input.human_email.toLowerCase();
   const verdict = validateUsername(input.username);
@@ -68,8 +80,8 @@ agent.post("/agent/sign-up", async (c) => {
         "INSERT INTO pods (pod_id, org_id, name, created_at) VALUES (?, ?, 'default', ?)"
       ).bind(podId, orgId, now),
       c.env.DB.prepare(
-        `INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, created_at)
-         VALUES (?, ?, NULL, ?, ?, 'admin', ?)`
+        `INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, source, created_at)
+         VALUES (?, ?, NULL, ?, ?, 'admin', 'agent', ?)`
       ).bind(keyId, orgId, await hashApiKey(apiKey), apiKey.slice(0, 12), now),
       c.env.DB.prepare(
         `INSERT INTO inboxes (inbox_id, org_id, pod_id, username, domain, created_at, updated_at)

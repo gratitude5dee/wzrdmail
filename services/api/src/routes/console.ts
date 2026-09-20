@@ -5,7 +5,6 @@ import { SESSION_COOKIE, authenticate, hashApiKey } from "../auth.js";
 import type { Env } from "../env.js";
 import { parseBody } from "../lib/http.js";
 import {
-  OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_MS,
   OTP_TTL_MS,
   SHARED_DOMAIN,
@@ -13,9 +12,13 @@ import {
   checkOtp,
   deliverOtp,
   issueOtp,
-  thirdwebComplete,
   thirdwebEmailForToken
 } from "../lib/otp.js";
+import {
+  type PendingSignup,
+  checkPendingSignup,
+  completeSignup
+} from "../lib/signup.js";
 
 export const consoleAuth = new Hono<{ Bindings: Env }>();
 
@@ -125,15 +128,6 @@ consoleAuth.post("/console/login", async (c) => {
   return c.json({ message: "If this email has an organization, a sign-in code is on its way." });
 });
 
-interface PendingSignup {
-  username: string;
-  org_name: string | null;
-  code_hash: string;
-  attempts: number;
-  expires_at: string;
-  created_at: string;
-}
-
 function pendingKey(email: string): string {
   return `signup_pending:${email}`;
 }
@@ -213,69 +207,6 @@ consoleAuth.post("/console/signup", async (c) => {
   });
 });
 
-/** Finalize a verified signup: create the org, default pod, and first inbox. */
-async function completeSignup(
-  env: Env,
-  humanEmail: string,
-  pending: PendingSignup
-): Promise<{ org_id: string; human_email: string }> {
-  const orgId = newId("org");
-  const podId = newId("pod");
-  const inboxId = `${pending.username}@${SHARED_DOMAIN}`;
-  const now = new Date().toISOString();
-  try {
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO organizations (org_id, name, plan, human_email, verified, created_at, updated_at)
-         VALUES (?, ?, 'free', ?, 1, ?, ?)`
-      ).bind(orgId, pending.org_name ?? pending.username, humanEmail, now, now),
-      env.DB.prepare(
-        "INSERT INTO pods (pod_id, org_id, name, created_at) VALUES (?, ?, 'default', ?)"
-      ).bind(podId, orgId, now),
-      env.DB.prepare(
-        `INSERT INTO inboxes (inbox_id, org_id, pod_id, username, domain, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(inboxId, orgId, podId, pending.username, SHARED_DOMAIN, now, now)
-    ]);
-  } catch (err) {
-    if (String(err).includes("UNIQUE")) {
-      throw new ApiError("conflict", "this email or username was registered while you verified; sign up again");
-    }
-    throw err;
-  }
-  return { org_id: orgId, human_email: humanEmail };
-}
-
-/** Check a pending-signup code (thirdweb or locally hashed) with an attempt cap. */
-async function checkPendingSignup(
-  env: Env,
-  humanEmail: string,
-  pending: PendingSignup,
-  submitted: string
-): Promise<"ok" | "exhausted" | "mismatch" | "expired" | "unavailable"> {
-  if (new Date(pending.expires_at).getTime() < Date.now()) return "expired";
-  if (pending.attempts >= OTP_MAX_ATTEMPTS) return "exhausted";
-  // KV writes are not atomic, so this attempt counter is best-effort; the
-  // short TTL bounds total guesses.
-  pending.attempts += 1;
-  await env.CACHE.put(pendingKey(humanEmail), JSON.stringify(pending), {
-    expirationTtl: Math.max(60, Math.ceil((new Date(pending.expires_at).getTime() - Date.now()) / 1000))
-  });
-  if (pending.code_hash === THIRDWEB_CODE) {
-    const result = await thirdwebComplete(env, humanEmail, submitted);
-    if (result === "unavailable") {
-      // Refund the attempt: the guess was never actually checked.
-      pending.attempts -= 1;
-      await env.CACHE.put(pendingKey(humanEmail), JSON.stringify(pending), {
-        expirationTtl: Math.max(60, Math.ceil((new Date(pending.expires_at).getTime() - Date.now()) / 1000))
-      });
-      return "unavailable";
-    }
-    return result === "ok" ? "ok" : "mismatch";
-  }
-  return pending.code_hash === (await hashApiKey(submitted)) ? "ok" : "mismatch";
-}
-
 consoleAuth.post("/console/verify", async (c) => {
   const input = await parseBody(c, VerifyInput);
   const humanEmail = input.email.toLowerCase();
@@ -300,7 +231,13 @@ consoleAuth.post("/console/verify", async (c) => {
   } else {
     const pending = await c.env.CACHE.get<PendingSignup>(pendingKey(humanEmail), "json");
     if (!pending) throw new ApiError("unauthorized", "incorrect email or code");
-    const verdict = await checkPendingSignup(c.env, humanEmail, pending, input.otp_code);
+    const verdict = await checkPendingSignup(
+      c.env,
+      pendingKey(humanEmail),
+      humanEmail,
+      pending,
+      input.otp_code
+    );
     if (verdict !== "ok") {
       if (verdict === "exhausted") {
         throw new ApiError("forbidden", "too many attempts; request a new code");

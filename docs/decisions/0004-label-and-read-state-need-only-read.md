@@ -15,7 +15,10 @@ agent has no way to record that it handled them.
 
 ## Decision
 
-Label and read-state mutations require `read`. Delete and restore stay `admin`.
+Label and read-state mutations require `read`, on the single-message PATCH, the
+thread PATCH and the batch update alike — they are the same mutation, and a key
+that can label one message should not be stopped at five. Delete and restore
+stay `admin`.
 
 Marking your own mail read is mailbox hygiene, not administration. The API's
 existing scoping is unchanged: a key still only reaches inboxes inside its own

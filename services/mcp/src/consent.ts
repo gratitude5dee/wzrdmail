@@ -219,6 +219,16 @@ export const consentHandler = {
           state.organizationId = result.organization_id;
           state.newUser = result.new_user;
           state.inboxes = result.inboxes.map((inbox) => ({ inbox_id: inbox.inbox_id }));
+          if (state.inboxes.length === 0) {
+            // Every grant is pinned to an inbox, so there is nothing to grant.
+            return setCookie(
+              noticePage(
+                "No inbox to connect",
+                "This account has no inbox. Create one in the wzrdmail console, then connect again."
+              ),
+              sid
+            );
+          }
           state.step = "consent";
           await saveState(env, sid, state);
           return setCookie(

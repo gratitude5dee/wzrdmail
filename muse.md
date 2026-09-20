@@ -412,6 +412,8 @@ is rebuilt; rows are preserved and the new columns default, which makes a code
 rollback safe without a migration rollback.
 
 ```sql
+-- Comments go on their own line: the migration runner splits on ';', so a
+-- trailing comment becomes a statement-less chunk and the migration fails.
 -- 0015_connect_login: third OTP purpose for the MCP OAuth consent flow (muse.md §5);
 -- api_keys provenance so the console can list "Connected apps".
 CREATE TABLE otp_codes_new (
@@ -428,8 +430,10 @@ INSERT INTO otp_codes_new (org_id, purpose, code_hash, attempts, expires_at, cre
 DROP TABLE otp_codes;
 ALTER TABLE otp_codes_new RENAME TO otp_codes;
 
-ALTER TABLE api_keys ADD COLUMN source TEXT NOT NULL DEFAULT 'console'; -- console | agent | oauth
-ALTER TABLE api_keys ADD COLUMN client_id TEXT;                          -- OAuth client_id when source='oauth'
+-- source: console | agent | oauth
+ALTER TABLE api_keys ADD COLUMN source TEXT NOT NULL DEFAULT 'console';
+-- client_id: the OAuth client_id when source='oauth'
+ALTER TABLE api_keys ADD COLUMN client_id TEXT;
 ```
 
 **Why a new purpose.** `otp_codes` is keyed `(org_id, purpose)` with a closed CHECK

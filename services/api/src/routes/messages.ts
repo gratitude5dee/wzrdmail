@@ -184,7 +184,9 @@ messages.post("/inboxes/:inbox_id/messages/batch-get", async (c) => {
 
 messages.patch("/inboxes/:inbox_id/messages/batch-update", async (c) => {
   const auth = await authenticate(c);
-  requirePermission(auth, "admin");
+  // Same mutation as the single-message PATCH, so the same permission (ADR 0004):
+  // a key that can label one message can label a hundred.
+  requirePermission(auth, "read");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const input = await parseBody(c, BatchUpdateMessagesInput);
   const rows = (
@@ -267,9 +269,11 @@ messages.get("/inboxes/:inbox_id/messages/:msg_id/attachments/:att_id", async (c
   });
 });
 
+// Labels and read state are ordinary mailbox hygiene, so a read-only key may
+// set them (muse.md §6.4 / ADR-0004). Delete and restore stay admin.
 messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   const auth = await authenticate(c);
-  requirePermission(auth, "admin");
+  requirePermission(auth, "read");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const row = await requireMessage(c, inbox, c.req.param("msg_id"));
   const input = await parseBody(c, UpdateMessageInput);

@@ -9,7 +9,7 @@ export const OTP_MAX_ATTEMPTS = 5;
 export const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 export const SHARED_DOMAIN = "wzrd.tech";
 
-export type OtpPurpose = "agent_verify" | "console_login";
+export type OtpPurpose = "agent_verify" | "console_login" | "connect_login";
 
 /** Sentinel code_hash marking a code that thirdweb (not us) holds and verifies. */
 export const THIRDWEB_CODE = "thirdweb";
@@ -117,16 +117,23 @@ async function sendCodeEmail(
   const from = `noreply@${SHARED_DOMAIN}`;
   mime.setSender(from);
   mime.setTo(email);
-  mime.setSubject(
-    purpose === "console_login" ? "Your wzrdmail console sign-in code" : "Your wzrdmail verification code"
-  );
+  const subject =
+    purpose === "console_login"
+      ? "Your wzrdmail console sign-in code"
+      : purpose === "connect_login"
+        ? "Your wzrdmail connection code"
+        : "Your wzrdmail verification code";
+  const body =
+    purpose === "console_login"
+      ? `Your wzrdmail console sign-in code is: ${code}`
+      : purpose === "connect_login"
+        ? `Your wzrdmail connection code is: ${code}\n\nSomeone is connecting an app to wzrdmail with this email.`
+        : `Your wzrdmail verification code is: ${code}`;
+  mime.setSubject(subject);
   mime.setHeader("Message-ID", `<${newId("msg")}@${SHARED_DOMAIN}>`);
   mime.addMessage({
     contentType: "text/plain",
-    data:
-      purpose === "console_login"
-        ? `Your wzrdmail console sign-in code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
-        : `Your wzrdmail verification code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
+    data: `${body}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.`
   });
   const provider = new CloudflareEmailProvider(env);
   const recipient = email.toLowerCase();

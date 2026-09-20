@@ -1,9 +1,10 @@
-import { ApiError, newId } from "@wzrdmail/core";
+import { ApiError } from "@wzrdmail/core";
 import { Hono } from "hono";
 import { z } from "zod";
-import { authenticate, hashApiKey, requirePermission } from "../auth.js";
+import { authenticate, requirePermission } from "../auth.js";
 import type { Env } from "../env.js";
 import { parseBody, requireInbox } from "../lib/http.js";
+import { mintApiKey } from "../lib/keys.js";
 
 export const keys = new Hono<{ Bindings: Env }>();
 
@@ -25,6 +26,8 @@ interface KeyRow {
   name: string | null;
   key_prefix: string;
   permissions: string;
+  source: string;
+  client_id: string | null;
   last_used_at: string | null;
   created_at: string;
 }
@@ -37,6 +40,8 @@ function keyJson(row: KeyRow): Record<string, unknown> {
     inbox_id: row.inbox_id,
     key_preview: `${row.key_prefix}\u2022\u2022\u2022`,
     permissions: row.permissions.split(",").map((p) => p.trim()),
+    source: row.source,
+    client_id: row.client_id,
     last_used_at: row.last_used_at,
     created_at: row.created_at
   };
@@ -46,7 +51,7 @@ keys.get("/api-keys", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "admin");
   const rows = await c.env.DB.prepare(
-    `SELECT key_id, pod_id, inbox_id, name, key_prefix, permissions, last_used_at, created_at
+    `SELECT key_id, pod_id, inbox_id, name, key_prefix, permissions, source, client_id, last_used_at, created_at
      FROM api_keys
      WHERE org_id = ? AND revoked_at IS NULL
        AND (? IS NULL OR pod_id = ?)
@@ -91,36 +96,23 @@ keys.post("/api-keys", async (c) => {
     input.inbox_id = inbox.inbox_id;
     input.pod_id = inbox.pod_id;
   }
-  const keyId = newId("key");
-  const secret = `wm_live_${[...crypto.getRandomValues(new Uint8Array(24))]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")}`;
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO api_keys (key_id, org_id, pod_id, inbox_id, key_hash, key_prefix, permissions, name, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      keyId,
-      auth.org_id,
-      input.pod_id ?? null,
-      input.inbox_id ?? null,
-      await hashApiKey(secret),
-      secret.slice(0, 12),
-      input.permissions.join(","),
-      input.name,
-      now
-    )
-    .run();
+  const minted = await mintApiKey(c.env, {
+    org_id: auth.org_id,
+    pod_id: input.pod_id ?? null,
+    inbox_id: input.inbox_id ?? null,
+    permissions: input.permissions,
+    name: input.name,
+    source: "console"
+  });
   return c.json(
     {
-      key_id: keyId,
+      key_id: minted.key_id,
       name: input.name,
       pod_id: input.pod_id ?? null,
       inbox_id: input.inbox_id ?? null,
-      api_key: secret,
+      api_key: minted.api_key,
       permissions: input.permissions,
-      created_at: now,
+      created_at: minted.created_at,
       message: "Store this key now; it will not be shown again."
     },
     201
