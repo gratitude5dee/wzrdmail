@@ -43,14 +43,56 @@ describe("worker entry", () => {
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
   });
 
-  it("401s a credential-less POST", async () => {
+  it("401s a credential-less POST with an RFC 9728 challenge and an envelope", async () => {
     const res = await SELF.fetch(MCP, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: initialize()
     });
     expect(res.status).toBe(401);
+
+    // The challenge is how a client discovers where to authorize, and the
+    // scope list is what a client that registers without one reads back.
+    const challenge = res.headers.get("www-authenticate") ?? "";
+    expect(challenge).toContain("Bearer");
+    expect(challenge).toContain(
+      'resource_metadata="http://localhost:8788/.well-known/oauth-protected-resource/mcp"'
+    );
+    expect(challenge).toContain('scope="mail:read mail:drafts mail:send"');
+
     await expect(res.json()).resolves.toMatchObject({ name: "unauthorized" });
+  });
+
+  it("publishes protected-resource metadata pointing at this server", async () => {
+    const res = await SELF.fetch(
+      "http://localhost:8788/.well-known/oauth-protected-resource/mcp"
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      resource: string;
+      authorization_servers: string[];
+      scopes_supported: string[];
+    };
+    expect(body.resource).toBe("http://localhost:8788/mcp");
+    expect(body.authorization_servers).toContain("http://localhost:8788");
+    expect(body.scopes_supported).toEqual(["mail:read", "mail:drafts", "mail:send"]);
+  });
+
+  it("advertises PKCE S256 and dynamic registration in authorization-server metadata", async () => {
+    const res = await SELF.fetch(
+      "http://localhost:8788/.well-known/oauth-authorization-server"
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      code_challenge_methods_supported: string[];
+      registration_endpoint: string;
+      authorization_endpoint: string;
+      token_endpoint: string;
+    };
+    expect(body.code_challenge_methods_supported).toContain("S256");
+    expect(body.registration_endpoint).toBe("http://localhost:8788/register");
+    expect(body.authorization_endpoint).toBe("http://localhost:8788/authorize");
+    expect(body.token_endpoint).toBe("http://localhost:8788/token");
   });
 });
 

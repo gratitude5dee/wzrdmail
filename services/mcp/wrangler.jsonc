@@ -1,4 +1,16 @@
-// wzrdmail MCP Worker (§9): McpAgent over Streamable HTTP at /mcp → mcp.mail.wzrd.tech.
+// wzrdmail MCP Worker (§9, muse.md): Streamable HTTP at /mcp → mcp.mail.wzrd.tech.
+//
+// Two transport lanes share /mcp (muse.md §4): the Durable Object lane for
+// streaming clients and a stateless JSON lane for hosted consumer agents. The
+// OAuth 2.1 authorization server (muse.md §5) runs on this same Worker because
+// RFC 9728 puts protected-resource metadata on the resource host.
+//
+// Secrets (set with `wrangler secret put --env <env>`, never in this file):
+//   CONNECT_SECRET   shared with services/api; gates its /v0/connect/* routes
+//
+// `global_fetch_strictly_public` is set on the deployed environments only: it
+// enables client ID metadata documents in the OAuth provider, but it also stops
+// fetch() reaching private hosts, which local dev needs for http://localhost:8787.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wzrdmail-mcp",
@@ -8,7 +20,9 @@
   // Local API worker (services/api) owns :8787; MCP dev binds :8788.
   "dev": { "port": 8788 },
   "vars": {
-    "API_BASE_URL": "http://localhost:8787"
+    "WZRDMAIL_ENV": "dev",
+    "API_BASE_URL": "http://localhost:8787",
+    "MCP_PUBLIC_ORIGIN": "http://localhost:8788"
   },
   "durable_objects": {
     "bindings": [
@@ -18,6 +32,12 @@
       }
     ]
   },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "placeholder-set-by-setup-script"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -26,19 +46,35 @@
   ],
   "env": {
     "staging": {
-      "vars": { "API_BASE_URL": "https://staging.api.wzrd.tech" },
+      "vars": {
+        "WZRDMAIL_ENV": "staging",
+        "API_BASE_URL": "https://staging.api.wzrd.tech",
+        "MCP_PUBLIC_ORIGIN": "https://staging.mcp.mail.wzrd.tech"
+      },
+      "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
       "workers_dev": true,
       "routes": [{ "pattern": "staging.mcp.mail.wzrd.tech", "custom_domain": true }],
       "durable_objects": {
         "bindings": [{ "name": "MCP_OBJECT", "class_name": "WzrdmailMcp" }]
-      }
+      },
+      "kv_namespaces": [
+        { "binding": "OAUTH_KV", "id": "placeholder-set-by-setup-script" }
+      ]
     },
     "production": {
-      "vars": { "API_BASE_URL": "https://api.wzrd.tech" },
+      "vars": {
+        "WZRDMAIL_ENV": "prod",
+        "API_BASE_URL": "https://api.wzrd.tech",
+        "MCP_PUBLIC_ORIGIN": "https://mcp.mail.wzrd.tech"
+      },
+      "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
       "routes": [{ "pattern": "mcp.mail.wzrd.tech", "custom_domain": true }],
       "durable_objects": {
         "bindings": [{ "name": "MCP_OBJECT", "class_name": "WzrdmailMcp" }]
-      }
+      },
+      "kv_namespaces": [
+        { "binding": "OAUTH_KV", "id": "placeholder-set-by-setup-script" }
+      ]
     }
   }
 }
