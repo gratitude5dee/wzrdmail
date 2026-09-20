@@ -92,6 +92,25 @@ describe("landing page", () => {
     );
   });
 
+  it("301s /legal paths to docs.mail.wzrd.tech", async () => {
+    const root = await app.request("/legal", {}, env);
+    expect(root.status).toBe(301);
+    expect(root.headers.get("Location")).toBe(
+      "https://docs.mail.wzrd.tech/legal/privacy"
+    );
+    for (const slug of ["privacy", "terms"]) {
+      const page = await app.request(`/legal/${slug}`, {}, env);
+      expect(page.status).toBe(301);
+      expect(page.headers.get("Location")).toBe(
+        `https://docs.mail.wzrd.tech/legal/${slug}`
+      );
+    }
+    const withQuery = await app.request("/legal/privacy?foo=bar", {}, env);
+    expect(withQuery.headers.get("Location")).toBe(
+      "https://docs.mail.wzrd.tech/legal/privacy?foo=bar"
+    );
+  });
+
   it("returns the error envelope on unknown routes", async () => {
     const res = await app.request("/nope", {}, env);
     expect(res.status).toBe(404);

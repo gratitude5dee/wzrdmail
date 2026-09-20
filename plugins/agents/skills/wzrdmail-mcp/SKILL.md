@@ -70,7 +70,13 @@ Add the same `type: http` server entry to the client's MCP config file:
 
 - **`x-api-key: wm_…` header** — recommended. Works with every Streamable HTTP client.
 - **`Authorization: Bearer wm_…` header** — equivalent alternative for clients that only support bearer auth.
-- **OAuth** — browser-based sign-in through the console; use the bare URL with no credentials once your client and the server both advertise it. If the server answers `401 unauthorized` to a credential-less request, OAuth is not enabled yet for that deployment — fall back to a header.
+- **OAuth 2.1 with PKCE** — live on the hosted server. Point an OAuth-capable client at the bare URL with no
+  credentials: the credential-less request answers `401` with a `WWW-Authenticate: Bearer` challenge carrying
+  `resource_metadata` and `scope="mail:read mail:drafts mail:send"`, and the client registers dynamically at
+  `/register`, authorizes at `/authorize` (PKCE `S256` required) and exchanges at `/token`. Browser sign-in with an
+  emailed one-time code and a consent screen mint an inbox-scoped grant; a user with no wzrdmail account picks a
+  username during the flow and comes out owning `<username>@wzrd.tech`. `admin` is never issued over OAuth, so
+  `create_inbox` and `create_webhook` still need a header key. Access tokens last an hour; refresh tokens rotate.
 
 Never pass the key as a query-string parameter; keys must not end up in logs or history.
 
@@ -87,7 +93,9 @@ An MCP session inherits the scope and permissions of the key that created it:
 
 Clients get the tool catalog and schemas live from the hosted runtime; do not rely on a copied tool count. Current tools:
 
-`list_inboxes`, `create_inbox`, `get_inbox`, `list_messages`, `get_message`, `send_message`, `reply_to_message`, `reply_all_to_message`, `forward_message`, `update_message`, `list_threads`, `get_thread`, `search_threads`, `list_drafts`, `create_draft`, `update_draft`, `send_draft`, `get_attachment`, `list_webhooks`, `create_webhook`, `list_domains`, `get_usage`.
+`whoami`, `check_new_mail`, `list_inboxes`, `create_inbox`, `get_inbox`, `list_messages`, `get_message`, `send_message`, `reply_to_message`, `reply_all_to_message`, `forward_message`, `update_message`, `list_threads`, `get_thread`, `search_threads`, `list_drafts`, `create_draft`, `update_draft`, `send_draft`, `get_attachment`, `list_webhooks`, `create_webhook`, `list_domains`, `get_usage` — 24 in all.
+
+`whoami` reports which address the connection owns and what it may do; call it first. `check_new_mail` polls for mail that arrived since the `next_since` it returned last time, which is how a scheduled agent notices new mail without webhooks.
 
 The source of truth is `services/mcp/src/tools.ts` in the wzrdmail repository.
 

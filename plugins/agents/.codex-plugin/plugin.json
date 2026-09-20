@@ -1,6 +1,6 @@
 {
   "name": "wzrdmail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Email for AI agents. Create @wzrd.tech inboxes, send and receive mail, manage threads and drafts, and automate email workflows through the hosted wzrdmail MCP server.",
   "author": {
     "name": "wzrdmail",

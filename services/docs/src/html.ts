@@ -14,6 +14,8 @@ interface NavGroup {
 function navGroups(basePath: string): NavGroup[] {
   const getStarted: NavGroup = { label: "Get Started", items: [] };
   const apiRef: NavGroup = { label: "API Reference", items: [] };
+  const mcp: NavGroup = { label: "MCP", items: [] };
+  const legal: NavGroup = { label: "Legal", items: [] };
   for (const page of PAGES) {
     const item = {
       slug: page.slug,
@@ -22,11 +24,15 @@ function navGroups(basePath: string): NavGroup[] {
     };
     if (page.slug.startsWith("api/")) {
       apiRef.items.push(item);
+    } else if (page.slug === "mcp" || page.slug.startsWith("mcp/")) {
+      mcp.items.push(item);
+    } else if (page.slug.startsWith("legal/")) {
+      legal.items.push(item);
     } else {
       getStarted.items.push(item);
     }
   }
-  return [getStarted, apiRef];
+  return [getStarted, mcp, apiRef, legal].filter((g) => g.items.length > 0);
 }
 
 function sidebarHtml(activeSlug: string, basePath: string): string {

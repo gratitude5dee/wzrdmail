@@ -4,8 +4,29 @@ import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const PERMS = ["read", "send", "admin"] as const;
 
+/**
+ * `source` and `client_id` arrive on keys minted by the OAuth authorization
+ * server (muse.md §5.4). Keys made here or by agent sign-up have neither, so
+ * both are optional and an absent `source` reads as "console".
+ */
+type KeyRow = ApiKey & {
+  source?: string | null;
+  client_id?: string | null;
+};
+
+/** OAuth grants are managed in Settings -> Connected apps; flag them here. */
+function SourceBadge({ source }: { source?: string | null }) {
+  if (source === "oauth") {
+    return <span className="chip accent">oauth</span>;
+  }
+  if (source === "agent") {
+    return <span className="chip">sign-up</span>;
+  }
+  return <span className="chip">console</span>;
+}
+
 export function ApiKeysPage() {
-  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [keys, setKeys] = useState<KeyRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [showApi, setShowApi] = useState(false);
   const [name, setName] = useState("");
@@ -15,7 +36,7 @@ export function ApiKeysPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await api<{ api_keys: ApiKey[] }>("/api-keys");
+    const res = await api<{ api_keys: KeyRow[] }>("/api-keys");
     setKeys(res.api_keys);
   }, []);
 
@@ -42,7 +63,7 @@ export function ApiKeysPage() {
     }
   };
 
-  const revoke = async (key: ApiKey) => {
+  const revoke = async (key: KeyRow) => {
     if (!window.confirm(`Revoke ${key.name ?? key.key_preview}? Agents using it will lose access.`))
       return;
     await api(`/api-keys/${key.key_id}`, { method: "DELETE" });
@@ -75,6 +96,7 @@ export function ApiKeysPage() {
               <tr>
                 <th>Name</th>
                 <th>Key</th>
+                <th>Source</th>
                 <th>Permissions</th>
                 <th>Last used</th>
                 <th>Created</th>
@@ -86,6 +108,9 @@ export function ApiKeysPage() {
                 <tr key={key.key_id}>
                   <td>{key.name ?? <span className="dim">unnamed</span>}</td>
                   <td className="mono">{key.key_preview}</td>
+                  <td>
+                    <SourceBadge source={key.source} />
+                  </td>
                   <td>
                     {key.permissions.map((p) => (
                       <span key={p} className="chip" style={{ marginRight: 4 }}>

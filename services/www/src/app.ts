@@ -67,6 +67,21 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.all("/docs", (c) => redirectToDocs(c));
   app.all("/docs/*", (c) => redirectToDocs(c));
 
+  // muse.md §8.1: the privacy policy and terms are docs pages under /legal/*,
+  // but the plugin manifests and the Muse listing advertise them on this
+  // host, so mirror the /docs behaviour. There is no /legal index page — bare
+  // /legal lands on the privacy policy, which links to the terms.
+  const redirectToLegal = (c: {
+    req: { path: string; url: string };
+    env: Env;
+  }): Response => {
+    const path = c.req.path === "/legal" ? "/legal/privacy" : c.req.path;
+    const search = new URL(c.req.url).search;
+    return Response.redirect(`https://${docsHost(c.env)}${path}${search}`, 301);
+  };
+  app.all("/legal", (c) => redirectToLegal(c));
+  app.all("/legal/*", (c) => redirectToLegal(c));
+
   app.notFound((c) =>
     c.json({ name: "not_found", message: "no such page" }, 404)
   );

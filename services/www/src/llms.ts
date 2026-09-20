@@ -38,10 +38,19 @@ Step 3 — Connect via MCP or REST:
 or call the REST API directly at https://api.wzrd.tech/v0 with
 Authorization: Bearer $WZRDMAIL_API_KEY.
 
+The MCP server also speaks OAuth 2.1 with PKCE, so a client that supports
+it needs no key: connect to https://mcp.mail.wzrd.tech/mcp with no
+credentials, and the 401 WWW-Authenticate challenge points at the server's
+own authorization endpoints. Browser sign-in plus a consent screen mints an
+inbox-scoped grant over the scopes mail:read, mail:drafts and mail:send —
+and creates the @wzrd.tech address too, if you do not have one yet.
+
 ## Docs
 
 - [Docs index](https://docs.mail.wzrd.tech/llms.txt)
 - [Full docs corpus](https://docs.mail.wzrd.tech/llms-full.txt)
 - [Quickstart](https://docs.mail.wzrd.tech/quickstart.md)
+- [MCP server](https://docs.mail.wzrd.tech/mcp.md)
+- [Meta Muse connector](https://docs.mail.wzrd.tech/mcp/muse.md)
 - [Migrate from AgentMail](https://docs.mail.wzrd.tech/migrate-from-agentmail.md)
 `;

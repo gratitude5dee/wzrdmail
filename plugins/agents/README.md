@@ -15,7 +15,7 @@ Every packaging shares the same `skills/` directory and the same hosted MCP serv
 https://mcp.mail.wzrd.tech/mcp      x-api-key: wm_live_…
 ```
 
-`.mcp.json` sends `x-api-key: ${WZRDMAIL_API_KEY}`; export `WZRDMAIL_API_KEY=wm_live_…` in the environment the client is launched from (Claude Code and Cursor expand `${VAR}` in MCP headers). Codex users configure the same URL and header in `~/.codex/config.toml` — see `skills/wzrdmail-mcp/SKILL.md`. The hosted MCP accepts only `x-api-key` / `Authorization: Bearer` today; OAuth is not yet available.
+`.mcp.json` sends `x-api-key: ${WZRDMAIL_API_KEY}`; export `WZRDMAIL_API_KEY=wm_live_…` in the environment the client is launched from (Claude Code and Cursor expand `${VAR}` in MCP headers). Codex users configure the same URL and header in `~/.codex/config.toml` — see `skills/wzrdmail-mcp/SKILL.md`. The hosted MCP also speaks OAuth 2.1 with PKCE: an OAuth-capable client can use the bare URL `https://mcp.mail.wzrd.tech/mcp` with no credentials and will be taken through browser sign-in and a consent screen, coming back with an inbox-scoped grant over `mail:read`, `mail:drafts` and `mail:send`. Header keys keep working exactly as before, and `create_inbox` / `create_webhook` still need one, because `admin` is never issued over OAuth.
 
 ## Skills
 
