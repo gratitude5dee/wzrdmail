@@ -39,6 +39,10 @@ openssl rand -hex 32          # paste into [connect] secret
 #    CONNECT_SECRET on both Workers.
 just setup staging
 
+# 1b. Confirm each env block got its OWN namespace id. The three ids must all
+#     differ; two blocks sharing one means a bad patch, not a saving.
+grep -A1 '"binding": "OAUTH_KV"' services/mcp/wrangler.jsonc
+
 # 2. Deploy, API first.
 just deploy staging
 just deploy-docs staging

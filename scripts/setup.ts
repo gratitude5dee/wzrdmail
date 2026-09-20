@@ -181,6 +181,12 @@ function setupMcp(envName: EnvName): void {
 /**
  * Replaces the KV id placeholder inside one env block. Both configs carry a
  * `WZRDMAIL_ENV` var per block, which is what makes the block findable.
+ *
+ * The search stops at the next block's `WZRDMAIL_ENV`. Without that bound a
+ * second run — and this script is advertised as idempotent and as the
+ * disaster-recovery path — would step over the env it already filled in and
+ * write this env's namespace id into the *following* block, quietly pointing
+ * production's OAuth store at staging.
  */
 function patchKvPlaceholder(configPath: string, envName: EnvName, kvId: string): void {
   const raw = readFileSync(configPath, "utf8");
@@ -189,9 +195,10 @@ function patchKvPlaceholder(configPath: string, envName: EnvName, kvId: string):
     console.warn(`no WZRDMAIL_ENV anchor for ${envName} in ${configPath}; set the KV id by hand`);
     return;
   }
+  const blockEnd = raw.indexOf('"WZRDMAIL_ENV":', anchor + 1);
   const placeholder = '"id": "placeholder-set-by-setup-script"';
   const idx = raw.indexOf(placeholder, anchor);
-  if (idx === -1) {
+  if (idx === -1 || (blockEnd !== -1 && idx > blockEnd)) {
     console.log(`${configPath} already has a KV id for ${envName} — ok`);
     return;
   }
@@ -213,24 +220,14 @@ function patchWranglerConfig(envName: EnvName, dbId: string, kvId: string): void
   const dbNeedle = new RegExp(
     `("database_name":\\s*"wzrdmail-${envName}",\\s*"database_id":\\s*")[^"]*(")`
   );
-  let next = raw.replace(dbNeedle, `$1${dbId}$2`);
-  // KV: replace the placeholder nearest this env's block; envs share the
-  // "placeholder-set-by-setup-script" sentinel until first setup.
-  const envAnchor =
-    envName === "dev"
-      ? next.indexOf('"WZRDMAIL_ENV": "dev"')
-      : next.indexOf(`"WZRDMAIL_ENV": "${envName === "prod" ? "prod" : "staging"}"`);
-  const kvIdx = next.indexOf('"id": "placeholder-set-by-setup-script"', envAnchor);
-  if (kvIdx !== -1) {
-    next =
-      next.slice(0, kvIdx) +
-      `"id": "${kvId}"` +
-      next.slice(kvIdx + '"id": "placeholder-set-by-setup-script"'.length);
-  }
+  const next = raw.replace(dbNeedle, `$1${dbId}$2`);
   if (next !== raw) {
     writeFileSync(WRANGLER_CONFIG, next);
     console.log(`patched ${WRANGLER_CONFIG} for ${envName}`);
   }
+  // The KV id goes in through the same block-bounded helper the MCP config
+  // uses, so neither config can have one env's namespace leak into another.
+  patchKvPlaceholder(WRANGLER_CONFIG, envName, kvId);
 }
 
 interface SetupConfig {
