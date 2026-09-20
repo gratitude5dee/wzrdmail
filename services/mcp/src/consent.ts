@@ -255,10 +255,18 @@ export const consentHandler = {
           await env.OAUTH_KV?.delete(stateKey(sid));
           return setCookie(denyRedirect(state.authRequest, "access_denied"), null);
         }
+        // Nothing can be granted before the one-time code proved who is asking.
+        if (state.step !== "consent" || state.connectToken === undefined) {
+          return noticePage("Not so fast", "Finish signing in before approving access.");
+        }
+        // A grant can narrow what the client asked for but never widen it, so
+        // intersect the form's answer with the request rather than trusting it.
+        const asked = new Set<string>(requestedScopes(state.authRequest));
         const granted = form
           .getAll("scopes")
           .map(String)
-          .filter(isScope);
+          .filter(isScope)
+          .filter((scope) => asked.has(scope));
         const scopes = granted.includes(REQUIRED_SCOPE) ? [...new Set(granted)] : [];
         if (scopes.length === 0) {
           return setCookie(denyRedirect(state.authRequest, "access_denied"), null);
@@ -266,7 +274,7 @@ export const consentHandler = {
         const inboxId = String(form.get("inbox_id") ?? "").trim();
         try {
           const key = await connect.complete({
-            connectToken: state.connectToken ?? "",
+            connectToken: state.connectToken,
             inboxId: inboxId === "" ? null : inboxId,
             permissions: permissionsForScopes(scopes),
             name: `${state.clientName} (connector)`,

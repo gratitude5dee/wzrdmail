@@ -367,3 +367,106 @@ describe("new user sign-up inside the flow", () => {
     expect(await code.text()).toContain("Check your email");
   });
 });
+
+describe("grant boundaries", () => {
+  it("cannot be widened past what the client asked for", async () => {
+    const clientId = await registerClient();
+    const { challenge } = await pkce();
+
+    // The client asks only to read.
+    const page = await SELF.fetch(
+      `${ORIGIN}/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT)}&state=s` +
+        `&scope=${encodeURIComponent("mail:read")}` +
+        `&code_challenge=${challenge}&code_challenge_method=S256`
+    );
+    const cookie = cookieFrom(page);
+    const csrf = csrfFrom(await page.text());
+
+    fetchMock
+      .get(API)
+      .intercept({ path: "/v0/connect/start", method: "POST" })
+      .reply(200, { registered: true });
+    await SELF.fetch(`${ORIGIN}/authorize/email`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, email: "owner@example.com" })
+    });
+
+    fetchMock
+      .get(API)
+      .intercept({ path: "/v0/connect/verify", method: "POST" })
+      .reply(200, {
+        connect_token: "ct_test",
+        organization_id: "org_test",
+        new_user: false,
+        inboxes: [{ inbox_id: "scout@wzrd.tech" }]
+      });
+    await SELF.fetch(`${ORIGIN}/authorize/verify`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, otp_code: "123456" })
+    });
+
+    // A forged form tries to grant sending as well.
+    let mintedWith: Record<string, unknown> = {};
+    fetchMock
+      .get(API)
+      .intercept({ path: "/v0/connect/complete", method: "POST" })
+      .reply((options) => {
+        mintedWith = JSON.parse(String(options.body)) as Record<string, unknown>;
+        return {
+          statusCode: 201,
+          data: {
+            api_key: MINTED_KEY,
+            key_id: "key_test",
+            inbox_id: "scout@wzrd.tech",
+            organization_id: "org_test",
+            permissions: ["read"]
+          },
+          responseOptions: { headers: { "content-type": "application/json" } }
+        };
+      });
+    await SELF.fetch(`${ORIGIN}/authorize/approve`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams([
+        ["csrf", csrf],
+        ["decision", "allow"],
+        ["inbox_id", "scout@wzrd.tech"],
+        ["scopes", "mail:read"],
+        ["scopes", "mail:send"]
+      ])
+    });
+
+    expect(mintedWith.permissions).toEqual(["read"]);
+  });
+
+  it("refuses to approve before the one-time code is verified", async () => {
+    const clientId = await registerClient();
+    const { challenge } = await pkce();
+    const page = await SELF.fetch(
+      `${ORIGIN}/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT)}&state=s` +
+        `&scope=${encodeURIComponent("mail:read")}` +
+        `&code_challenge=${challenge}&code_challenge_method=S256`
+    );
+    const cookie = cookieFrom(page);
+    const csrf = csrfFrom(await page.text());
+
+    const early = await SELF.fetch(`${ORIGIN}/authorize/approve`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams([
+        ["csrf", csrf],
+        ["decision", "allow"],
+        ["inbox_id", "scout@wzrd.tech"],
+        ["scopes", "mail:read"]
+      ])
+    });
+    expect(early.status).toBe(200);
+    expect(await early.text()).toContain("Finish signing in");
+  });
+});

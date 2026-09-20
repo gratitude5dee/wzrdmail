@@ -546,6 +546,22 @@ gains Connected apps.
 
 ## 9. Milestones
 
+**Implementation status (2026-09-20, branch `claude/muse-connector-spec`).**
+MU0 through MU5 have landed with tests: the Workers harness, the JSON lane, the
+connect endpoints and migration 0015, the authorization server and consent
+flow, and the docs, legal and listing surface. `pnpm check` is green across all
+26 tasks (303 tests). MU6 and MU7 are open: MU6 needs production deploys and a
+live Muse account, MU7 waits a week of the JSON lane in production. Three
+non-code items block MU6 — legal review of the two placeholder pages, a routed
+`support@wzrd.tech`, and the 512×512 icon.
+
+Two corrections this file owes its own readers, found while executing it:
+the migration DDL in §7.3 had trailing comments after the semicolons, which the
+migration runner cannot parse (comments now sit on their own lines); and §6.4
+named only the single-message and thread PATCH routes, while the batch update
+performs the identical mutation and is now relaxed with them (ADR 0004).
+
+
 Each lands as its own PR with its Verify block executed and pasted in, per
 `goal.md:539`. Do not start one with the previous Verify failing.
 
