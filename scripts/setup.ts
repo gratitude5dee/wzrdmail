@@ -5,7 +5,8 @@
  *  3. patch wrangler.jsonc with the real resource ids
  *  4. apply D1 migrations (forward-only)
  *  5. set Worker secrets from scripts/config.toml
- *  6. print Email Routing / Email Service / DNS state for the zone
+ *  6. provision the MCP Worker's OAuth storage and shared secret (muse.md §9.2)
+ *  7. print Email Routing / Email Service / DNS state for the zone
  *
  * Safe to re-run; this is also the disaster-recovery script.
  *
@@ -19,7 +20,9 @@ const ENVS = ["dev", "staging", "prod"] as const;
 type EnvName = (typeof ENVS)[number];
 
 const API_DIR = resolve(import.meta.dirname, "../services/api");
+const MCP_DIR = resolve(import.meta.dirname, "../services/mcp");
 const WRANGLER_CONFIG = resolve(API_DIR, "wrangler.jsonc");
+const MCP_WRANGLER_CONFIG = resolve(MCP_DIR, "wrangler.jsonc");
 const CONFIG_PATH = resolve(import.meta.dirname, "config.toml");
 
 const WRANGLER_ENV_FLAG: Record<EnvName, string[]> = {
@@ -28,11 +31,11 @@ const WRANGLER_ENV_FLAG: Record<EnvName, string[]> = {
   prod: ["--env", "production"]
 };
 
-function wrangler(args: string[], opts: { json?: boolean } = {}): string {
+function wrangler(args: string[], opts: { json?: boolean; cwd?: string } = {}): string {
   const finalArgs = ["wrangler", ...args];
   console.log(`$ npx ${finalArgs.join(" ")}`);
   return execFileSync("npx", finalArgs, {
-    cwd: API_DIR,
+    cwd: opts.cwd ?? API_DIR,
     encoding: "utf8",
     stdio: opts.json ? ["ignore", "pipe", "inherit"] : ["ignore", "pipe", "inherit"]
   });
@@ -109,9 +112,99 @@ function main(): void {
   if (envName !== "dev") setSecrets(envName);
   else console.log("dev env: put secrets in services/api/.dev.vars");
 
+  // 6. the MCP Worker: OAuth storage plus the secret it shares with the API
+  setupMcp(envName);
+
   console.log(
     `\nDone. Next (manual, dashboard/API): enable Email Routing + Email Service on the zone, install catch-all → wzrdmail-api, verify SPF/DKIM/DMARC. See docs/runbooks/.`
   );
+}
+
+
+/**
+ * Provisions the MCP Worker (muse.md §9.2).
+ *
+ * It needs two things the API does not: a KV namespace for the OAuth
+ * authorization server's state, and `CONNECT_SECRET` — the same value on both
+ * Workers, because it is what the consent page presents to the API's
+ * /v0/connect/* routes. Until all of it exists the OAuth lane stays dark and
+ * the Worker serves API-key clients exactly as before, so running this after
+ * a deploy is safe.
+ */
+function setupMcp(envName: EnvName): void {
+  console.log("\n--- MCP Worker (OAuth) ---");
+
+  const kvTitle = `wzrdmail-oauth-${envName}`;
+  const kvs = JSON.parse(
+    wrangler(["kv", "namespace", "list"], { json: true, cwd: MCP_DIR })
+  ) as { id: string; title: string }[];
+  let kv = kvs.find((n) => n.title.endsWith(kvTitle));
+  if (!kv) {
+    wrangler(["kv", "namespace", "create", kvTitle], { cwd: MCP_DIR });
+    const after = JSON.parse(
+      wrangler(["kv", "namespace", "list"], { json: true, cwd: MCP_DIR })
+    ) as { id: string; title: string }[];
+    kv = after.find((n) => n.title.endsWith(kvTitle));
+  }
+  if (!kv) throw new Error(`failed to create KV namespace ${kvTitle}`);
+  console.log(`KV ${kvTitle}: ${kv.id}`);
+
+  patchKvPlaceholder(MCP_WRANGLER_CONFIG, envName, kv.id);
+
+  if (envName === "dev") {
+    console.log("dev env: put CONNECT_SECRET in services/api/.dev.vars and services/mcp/.dev.vars");
+    return;
+  }
+
+  const secret = readConfig()?.connect?.secret;
+  if (!secret) {
+    console.warn(
+      "no [connect] secret in scripts/config.toml — OAuth stays dark until it is set.\n" +
+        "  Generate one with: openssl rand -hex 32"
+    );
+    return;
+  }
+  // The same value on both Workers, or the consent page cannot reach the API.
+  for (const [label, cwd] of [
+    ["api", API_DIR],
+    ["mcp", MCP_DIR]
+  ] as const) {
+    console.log(`setting secret CONNECT_SECRET on ${label}`);
+    execFileSync(
+      "npx",
+      ["wrangler", "secret", "put", "CONNECT_SECRET", ...WRANGLER_ENV_FLAG[envName]],
+      { cwd, input: secret, stdio: ["pipe", "inherit", "inherit"] }
+    );
+  }
+}
+
+/**
+ * Replaces the KV id placeholder inside one env block. Both configs carry a
+ * `WZRDMAIL_ENV` var per block, which is what makes the block findable.
+ */
+function patchKvPlaceholder(configPath: string, envName: EnvName, kvId: string): void {
+  const raw = readFileSync(configPath, "utf8");
+  const anchor = raw.indexOf(`"WZRDMAIL_ENV": "${envName}"`);
+  if (anchor === -1) {
+    console.warn(`no WZRDMAIL_ENV anchor for ${envName} in ${configPath}; set the KV id by hand`);
+    return;
+  }
+  const placeholder = '"id": "placeholder-set-by-setup-script"';
+  const idx = raw.indexOf(placeholder, anchor);
+  if (idx === -1) {
+    console.log(`${configPath} already has a KV id for ${envName} — ok`);
+    return;
+  }
+  writeFileSync(
+    configPath,
+    raw.slice(0, idx) + `"id": "${kvId}"` + raw.slice(idx + placeholder.length)
+  );
+  console.log(`patched ${configPath} for ${envName}`);
+}
+
+function readConfig(): SetupConfig | null {
+  if (!existsSync(CONFIG_PATH)) return null;
+  return parseToml(readFileSync(CONFIG_PATH, "utf8"));
 }
 
 function patchWranglerConfig(envName: EnvName, dbId: string, kvId: string): void {
@@ -143,6 +236,7 @@ function patchWranglerConfig(envName: EnvName, dbId: string, kvId: string): void
 interface SetupConfig {
   secrets?: Record<string, string>;
   stripe?: Record<string, string>;
+  connect?: Record<string, string>;
 }
 
 function setSecrets(envName: EnvName): void {

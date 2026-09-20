@@ -134,3 +134,17 @@ describe("GET /llms.txt", () => {
     expect(body).toContain("wm_live_");
   });
 });
+
+describe("listing icon", () => {
+  it("serves the 512x512 connector icon", async () => {
+    const res = await app.request("/icon-512.png", {}, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // PNG magic, then the IHDR width/height big-endian at bytes 16-23.
+    expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    const view = new DataView(bytes.buffer);
+    expect(view.getUint32(16)).toBe(512);
+    expect(view.getUint32(20)).toBe(512);
+  });
+});

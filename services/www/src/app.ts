@@ -4,6 +4,7 @@ import appleTouchIcon from "./assets/apple-touch-icon.png";
 import faviconIco from "./assets/favicon.ico";
 import favicon32 from "./assets/favicon-32.png";
 import icon192 from "./assets/icon-192.png";
+import icon512 from "./assets/icon-512.png";
 import logoPng from "./assets/logo.png";
 import type { Env } from "./env.js";
 import { LLMS_TXT } from "./llms.js";
@@ -14,6 +15,8 @@ const ASSETS: Record<string, { body: ArrayBuffer; type: string }> = {
   "/favicon.ico": { body: faviconIco, type: "image/x-icon" },
   "/favicon-32.png": { body: favicon32, type: "image/png" },
   "/icon-192.png": { body: icon192, type: "image/png" },
+  // 512x512 listing icon for connector directories (muse.md §8.2).
+  "/icon-512.png": { body: icon512, type: "image/png" },
   "/apple-touch-icon.png": { body: appleTouchIcon, type: "image/png" }
 };
 

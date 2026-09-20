@@ -13,6 +13,13 @@ session_secret = ""
 otp_pepper = ""
 api_key_pepper = ""
 
+[connect]
+# Shared by the API and the MCP Worker: the consent page presents it to the
+# API's /v0/connect/* routes, which 404 without it. The SAME value must reach
+# both Workers, so keep it here rather than generating one per run.
+# 32 bytes hex; generate with: openssl rand -hex 32
+secret = ""
+
 [stripe]
 secret_key = ""
 webhook_secret = ""
