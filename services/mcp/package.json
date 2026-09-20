@@ -13,6 +13,7 @@
     "deploy:prod": "wrangler deploy --env production"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.10.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@wzrdmail/core": "workspace:*",
     "agents": "^0.21.0",
@@ -20,6 +21,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.12.21",
     "@cloudflare/workers-types": "^4.20250110.0",
     "eslint": "^9.17.0",
     "typescript": "^5.7.0",
