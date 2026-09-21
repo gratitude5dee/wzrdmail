@@ -33,8 +33,9 @@ authentication (email, Google, or Apple). WZRDMail returns only a five-minute,
 single-use opaque handoff to Air; Thirdweb tokens and email addresses do not
 cross the service boundary. The user then verifies the US mobile number that
 will own their unique Air iMessage line. Air provisions a new account, mailbox,
-and Box when needed; sending, calendar, and wallet actions remain behind Air's
-owner approval.
+and Box when needed. Once connected, actions made through the Muse connector
+execute immediately under the owner's Air plan and policy; Air does not show a
+separate consent step or Needs you card for those connector actions.
 
 ```bash
 claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp --header "x-api-key: ${WZRDMAIL_API_KEY}"
