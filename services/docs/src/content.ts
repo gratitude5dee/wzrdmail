@@ -541,6 +541,20 @@ https://mcp.mail.wzrd.tech/mcp        Streamable HTTP
 x-api-key: wm_live_…                  or  Authorization: Bearer wm_live_…
 \`\`\`
 
+The same endpoint also relays the **Air × Muse** connector when no WZRDMail
+API key is supplied. It advertises Air's OAuth 2.1 + PKCE resource challenge
+and forwards the resulting opaque token directly to Air; it never exposes that
+token to WZRDMail's API or mailbox Durable Object. Use this lane only when
+connecting Air to Muse—mail clients should continue sending \`x-api-key\`.
+
+The Air connection signs in through the existing WZRDMail console's Thirdweb
+authentication (email, Google, or Apple). WZRDMail returns only a five-minute,
+single-use opaque handoff to Air; Thirdweb tokens and email addresses do not
+cross the service boundary. The user then verifies the US mobile number that
+will own their unique Air iMessage line. Air provisions a new account, mailbox,
+and Box when needed; sending, calendar, and wallet actions remain behind Air's
+owner approval.
+
 \`\`\`bash
 claude mcp add --transport http wzrdmail https://mcp.mail.wzrd.tech/mcp --header "x-api-key: \${WZRDMAIL_API_KEY}"
 \`\`\`
