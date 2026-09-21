@@ -1,7 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { ApiClient } from "./api.js";
-import { isMuseDiscoveryPath, isWzrdmailRequest, proxyMuse } from "./air-muse.js";
+import {
+  isMuseDiscoveryPath,
+  isWzrdmailRequest,
+  proxyMuse,
+  sharedMcpMetadata
+} from "./air-muse.js";
 import { extractApiKey, sessionKeyGuard } from "./auth.js";
 import { registerResources } from "./resources.js";
 import { registerTools } from "./tools.js";
@@ -83,7 +88,17 @@ export default {
     // `muse.wzrd.tech` as the OAuth resource, so token issuance and revocation
     // remain entirely within Air.
     if (request.method === "GET" && isMuseDiscoveryPath(url.pathname)) {
-      return withCors(await proxyMuse(request, env.MUSE_ORIGIN));
+      const response = await proxyMuse(request, env.MUSE_ORIGIN);
+      if (url.pathname !== "/.well-known/mcp.json") return withCors(response);
+      const metadata = await response.clone().json().catch(() => null);
+      if (metadata === null) return withCors(response);
+      return withCors(
+        Response.json(sharedMcpMetadata(metadata, request), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        })
+      );
     }
     if (url.pathname !== "/mcp") {
       return withCors(

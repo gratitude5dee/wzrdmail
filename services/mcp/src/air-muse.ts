@@ -33,6 +33,19 @@ export function museTarget(request: Request, origin = DEFAULT_MUSE_ORIGIN): stri
   return target.toString();
 }
 
+/** The shared host is a first-class MCP endpoint, even though Air remains
+ * the OAuth protected resource. Keep discovery clients on the URL they used
+ * while resource metadata continues to identify Air's issuer and audience. */
+export function sharedMcpMetadata(metadata: unknown, request: Request): unknown {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return metadata;
+  const url = new URL(request.url);
+  return {
+    ...metadata,
+    endpoint: `${url.origin}/mcp`,
+    documentation: `${url.origin}/muse.md`
+  };
+}
+
 /** Preserve the full MCP request (including the opaque OAuth bearer) on the
  * hop to Air. `Request` construction changes only the origin, so Cloudflare
  * supplies the upstream Host rather than forwarding mcp.mail.wzrd.tech. */

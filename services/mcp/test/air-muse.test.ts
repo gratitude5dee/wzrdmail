@@ -4,7 +4,8 @@ import {
   isMuseDiscoveryPath,
   isWzrdmailRequest,
   museTarget,
-  proxyMuse
+  proxyMuse,
+  sharedMcpMetadata
 } from "../src/air-muse.js";
 
 const request = (headers: Record<string, string> = {}, path = "/mcp") =>
@@ -38,6 +39,24 @@ describe("Air × Muse proxy lane", () => {
     expect(isMuseDiscoveryPath("/muse.md")).toBe(true);
     expect(isMuseDiscoveryPath("/.well-known/oauth-authorization-server")).toBe(false);
     expect(isMuseDiscoveryPath("/mcp")).toBe(false);
+  });
+
+  it("advertises the shared endpoint while keeping Air's OAuth metadata", () => {
+    expect(
+      sharedMcpMetadata(
+        {
+          name: "Air × Muse",
+          endpoint: "https://muse.wzrd.tech/mcp",
+          authorization: "https://muse.wzrd.tech/.well-known/oauth-protected-resource/mcp"
+        },
+        new Request("https://mcp.mail.wzrd.tech/.well-known/mcp.json")
+      )
+    ).toEqual({
+      name: "Air × Muse",
+      endpoint: "https://mcp.mail.wzrd.tech/mcp",
+      documentation: "https://mcp.mail.wzrd.tech/muse.md",
+      authorization: "https://muse.wzrd.tech/.well-known/oauth-protected-resource/mcp"
+    });
   });
 
   it("forwards the opaque bearer and request body only to the Air origin", async () => {
