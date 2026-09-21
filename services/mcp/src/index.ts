@@ -1,12 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { ApiClient } from "./api.js";
+import { isMuseDiscoveryPath, isWzrdmailRequest, proxyMuse } from "./air-muse.js";
 import { extractApiKey, sessionKeyGuard } from "./auth.js";
 import { registerResources } from "./resources.js";
 import { registerTools } from "./tools.js";
 
 interface Env {
   API_BASE_URL: string;
+  /** Optional Air × Muse upstream. Kept public: it is an origin, not a secret. */
+  MUSE_ORIGIN?: string;
   MCP_OBJECT: DurableObjectNamespace;
 }
 
@@ -19,7 +22,7 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, x-api-key, mcp-session-id, mcp-protocol-version, last-event-id",
-  "Access-Control-Expose-Headers": "mcp-session-id",
+  "Access-Control-Expose-Headers": "mcp-session-id, www-authenticate",
   "Access-Control-Max-Age": "86400"
 };
 
@@ -75,6 +78,13 @@ export default {
     if (url.pathname === "/health") {
       return withCors(Response.json({ ok: true }));
     }
+    // Publish the Air connector discovery documents on the same host without
+    // taking over any WZRDMail routes. Its protected-resource metadata keeps
+    // `muse.wzrd.tech` as the OAuth resource, so token issuance and revocation
+    // remain entirely within Air.
+    if (request.method === "GET" && isMuseDiscoveryPath(url.pathname)) {
+      return withCors(await proxyMuse(request, env.MUSE_ORIGIN));
+    }
     if (url.pathname !== "/mcp") {
       return withCors(
         Response.json(
@@ -83,8 +93,13 @@ export default {
         )
       );
     }
-    // OAuth 2.1 mode (workers-oauth-provider) lands with the console; until
-    // then only x-api-key / Bearer clients are accepted.
+    // A WZRDMail key selects the existing mail toolset. Without one, relay
+    // directly to Air × Muse: its 401 resource-metadata challenge initiates
+    // OAuth 2.1 + PKCE for connector clients, and opaque OAuth tokens never
+    // reach this Worker's Durable Object or api.wzrd.tech.
+    if (!isWzrdmailRequest(request)) {
+      return withCors(await proxyMuse(request, env.MUSE_ORIGIN));
+    }
     const apiKey = extractApiKey(request);
     if (apiKey === null) {
       return withCors(

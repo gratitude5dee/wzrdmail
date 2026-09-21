@@ -20,6 +20,12 @@ Set `WZRDMAIL_API_KEY` in the client's environment; the skills never embed keys.
 ```text
 https://mcp.mail.wzrd.tech/mcp        Streamable HTTP
 x-api-key: wm_live_…                  or  Authorization: Bearer wm_live_…
+
+The same endpoint also relays the **Air × Muse** connector when no WZRDMail
+API key is supplied. It advertises Air's OAuth 2.1 + PKCE resource challenge
+and forwards the resulting opaque token directly to Air; it never exposes that
+token to WZRDMail's API or mailbox Durable Object. Use this lane only when
+connecting Air to Muse—mail clients should continue sending `x-api-key`.
 ```
 
 ```bash

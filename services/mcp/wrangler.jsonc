@@ -8,7 +8,8 @@
   // Local API worker (services/api) owns :8787; MCP dev binds :8788.
   "dev": { "port": 8788 },
   "vars": {
-    "API_BASE_URL": "http://localhost:8787"
+    "API_BASE_URL": "http://localhost:8787",
+    "MUSE_ORIGIN": "https://muse.wzrd.tech"
   },
   "durable_objects": {
     "bindings": [
@@ -26,7 +27,10 @@
   ],
   "env": {
     "staging": {
-      "vars": { "API_BASE_URL": "https://staging.api.wzrd.tech" },
+      "vars": {
+        "API_BASE_URL": "https://staging.api.wzrd.tech",
+        "MUSE_ORIGIN": "https://muse.wzrd.tech"
+      },
       "workers_dev": true,
       "routes": [{ "pattern": "staging.mcp.mail.wzrd.tech", "custom_domain": true }],
       "durable_objects": {
@@ -34,7 +38,10 @@
       }
     },
     "production": {
-      "vars": { "API_BASE_URL": "https://api.wzrd.tech" },
+      "vars": {
+        "API_BASE_URL": "https://api.wzrd.tech",
+        "MUSE_ORIGIN": "https://muse.wzrd.tech"
+      },
       "routes": [{ "pattern": "mcp.mail.wzrd.tech", "custom_domain": true }],
       "durable_objects": {
         "bindings": [{ "name": "MCP_OBJECT", "class_name": "WzrdmailMcp" }]
