@@ -9,6 +9,7 @@ import { InboxDetailPage } from "./pages/InboxDetail";
 import { InboxesPage } from "./pages/Inboxes";
 import { ListsPage } from "./pages/Lists";
 import { LoginPage } from "./pages/Login";
+import { MuseConnectPage } from "./pages/MuseConnect";
 import { MetricsPage } from "./pages/Metrics";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
@@ -35,6 +36,13 @@ export function App() {
   }, [refresh]);
 
   if (loading) return <div className="login-wrap dim">Loading…</div>;
+  // Air always sends users through the existing Thirdweb-powered WZRDMail
+  // sign-in. Once the session is available, this route creates the one-use
+  // server-to-server handoff and navigates back to Air's consent flow.
+  if (window.location.pathname === "/connect/muse") {
+    if (!session) return <LoginPage onLogin={refresh} />;
+    return <MuseConnectPage signedIn />;
+  }
   if (!session) return <LoginPage onLogin={refresh} />;
 
   return (

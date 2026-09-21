@@ -14,7 +14,8 @@ import {
   deliverOtp,
   issueOtp,
   thirdwebComplete,
-  thirdwebEmailForToken
+  thirdwebEmailForToken,
+  thirdwebInitiate
 } from "../lib/otp.js";
 
 export const consoleAuth = new Hono<{ Bindings: Env }>();
@@ -33,11 +34,59 @@ const ThirdwebInput = z.object({
   username: z.string().min(1).max(64).optional(),
   org_name: z.string().min(1).max(120).optional()
 });
+const MuseCompleteInput = z.object({ return_to: z.string().url().max(2048) });
+const MuseRedeemInput = z.object({ code: z.string().regex(/^wmc_[a-f0-9]{64}$/) });
+const MusePhoneInput = z.object({ phone: z.string().trim().min(7).max(32) });
+const MusePhoneCompleteInput = MusePhoneInput.extend({
+  code: z.string().trim().regex(/^\d{6}$/)
+});
+
+const MUSE_TICKET_TTL_MS = 5 * 60 * 1000;
 
 function randomToken(bytes: number): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
   return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function fixedTimeEqual(actual: string, expected: string): boolean {
+  if (actual.length !== expected.length) return false;
+  const actualBytes = new TextEncoder().encode(actual);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let mismatch = 0;
+  for (let index = 0; index < actualBytes.length; index += 1) {
+    mismatch |= actualBytes[index]! ^ expectedBytes[index]!;
+  }
+  return mismatch === 0;
+}
+
+function requireMuseConnector(c: { env: Env; req: { header: (name: string) => string | undefined } }): void {
+  const expected = c.env.MUSE_CONNECTOR_TOKEN;
+  const header = c.req.header("authorization")?.trim();
+  const token = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
+  if (!expected || !token || !fixedTimeEqual(token, expected)) {
+    throw new ApiError("unauthorized", "invalid connector credential");
+  }
+}
+
+/** The browser may only return to Air's fixed authorization endpoint. */
+function validMuseReturnUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    if (url.origin !== "https://muse.wzrd.tech" || url.pathname !== "/authorize") return null;
+    const flow = url.searchParams.get("wzrdmail_flow");
+    return flow && /^[a-zA-Z0-9_-]{32,128}$/.test(flow) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMusePhone(value: string): string {
+  const digits = value.replace(/[^+\d]/g, "");
+  if (digits.startsWith("+")) return digits;
+  if (/^\d{10}$/.test(digits)) return `+1${digits}`;
+  if (/^1\d{10}$/.test(digits)) return `+${digits}`;
+  return digits;
 }
 
 function sessionCookie(env: Env, token: string, maxAgeSeconds: number): string {
@@ -392,6 +441,74 @@ consoleAuth.post("/console/thirdweb", async (c) => {
   }
   await mintSession(c, org);
   return c.json({ registered: true, organization_id: org.org_id, email: org.human_email });
+});
+
+/**
+ * Turn a signed-in WZRDMail console session into a single-use connector code.
+ * The browser gets only the opaque code; Air redeems it server-to-server and
+ * receives an opaque org subject, never the Thirdweb token or email address.
+ */
+consoleAuth.post("/console/muse/complete", async (c) => {
+  const input = await parseBody(c, MuseCompleteInput);
+  const returnTo = validMuseReturnUrl(input.return_to);
+  if (!returnTo) throw new ApiError("validation_error", "invalid Air return URL");
+  const auth = await authenticate(c);
+  const code = `wmc_${randomToken(32)}`;
+  const now = new Date();
+  await c.env.DB.prepare(
+    `INSERT INTO muse_connector_tickets (code_hash, subject, expires_at, created_at)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(
+      await hashApiKey(code),
+      `wzrdmail:${auth.org_id}`,
+      new Date(now.getTime() + MUSE_TICKET_TTL_MS).toISOString(),
+      now.toISOString()
+    )
+    .run();
+  returnTo.searchParams.set("wzrdmail_code", code);
+  return c.json({ redirect_to: returnTo.toString() }, { headers: { "cache-control": "no-store" } });
+});
+
+/** Redeem a WZRDMail identity ticket exactly once from the Air Worker. */
+consoleAuth.post("/console/muse/redeem", async (c) => {
+  requireMuseConnector(c);
+  const input = await parseBody(c, MuseRedeemInput);
+  const now = new Date().toISOString();
+  const ticket = await c.env.DB.prepare(
+    `UPDATE muse_connector_tickets
+     SET redeemed_at = ?
+     WHERE code_hash = ? AND redeemed_at IS NULL AND expires_at > ?
+     RETURNING subject`
+  )
+    .bind(now, await hashApiKey(input.code), now)
+    .first<{ subject: string }>();
+  if (!ticket) throw new ApiError("unauthorized", "expired or redeemed connector code");
+  return c.json({ subject: ticket.subject }, { headers: { "cache-control": "no-store" } });
+});
+
+/** Air asks WZRDMail's Thirdweb authority to begin the phone-possession check. */
+consoleAuth.post("/console/muse/phone/start", async (c) => {
+  requireMuseConnector(c);
+  const input = await parseBody(c, MusePhoneInput);
+  const phone = normalizeMusePhone(input.phone);
+  if (!/^\+1\d{10}$/.test(phone)) throw new ApiError("validation_error", "invalid US mobile number");
+  if (!c.env.THIRDWEB_CLIENT_ID || !(await thirdwebInitiate(c.env, phone))) {
+    throw new ApiError("internal_error", "phone verification unavailable");
+  }
+  return c.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+});
+
+/** Complete the phone check with the same Thirdweb project as WZRDMail sign-in. */
+consoleAuth.post("/console/muse/phone/complete", async (c) => {
+  requireMuseConnector(c);
+  const input = await parseBody(c, MusePhoneCompleteInput);
+  const phone = normalizeMusePhone(input.phone);
+  if (!/^\+1\d{10}$/.test(phone)) throw new ApiError("validation_error", "invalid US mobile number");
+  const verdict = await thirdwebComplete(c.env, phone, input.code);
+  if (verdict === "unavailable") throw new ApiError("internal_error", "phone verification unavailable");
+  if (verdict !== "ok") throw new ApiError("unauthorized", "incorrect phone verification code");
+  return c.json({ verified: true }, { headers: { "cache-control": "no-store" } });
 });
 
 consoleAuth.get("/console/session", async (c) => {

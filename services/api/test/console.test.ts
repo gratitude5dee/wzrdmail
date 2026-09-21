@@ -119,6 +119,76 @@ describe("console auth", () => {
   });
 });
 
+const museEnv = new Proxy(env, {
+  get: (target, prop) =>
+    prop === "MUSE_CONNECTOR_TOKEN" ? "test-muse-connector-token" : Reflect.get(target, prop)
+});
+
+describe("Air × Muse Thirdweb handoff", () => {
+  it("creates a short-lived one-use opaque identity handoff for a signed-in console user", async () => {
+    const seeded = await seedInbox();
+    const org = await env.DB.prepare("SELECT human_email FROM organizations WHERE org_id = ?")
+      .bind(seeded.org_id)
+      .first<{ human_email: string }>();
+    await seedConsoleOtp(seeded.org_id, "123456");
+    const verify = await app.request(
+      "/v0/console/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ email: org?.human_email, otp_code: "123456" }),
+        headers: { "content-type": "application/json" }
+      },
+      env
+    );
+    const cookie = (verify.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const complete = await app.request(
+      "/v0/console/muse/complete",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          return_to: "https://muse.wzrd.tech/authorize?wzrdmail_flow=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie,
+          origin: "https://console.mail.wzrd.tech"
+        }
+      },
+      env
+    );
+    expect(complete.status).toBe(200);
+    const redirect = new URL(((await complete.json()) as { redirect_to: string }).redirect_to);
+    const code = redirect.searchParams.get("wzrdmail_code");
+    expect(code).toMatch(/^wmc_[a-f0-9]{64}$/);
+
+    const redeem = () => app.request(
+      "/v0/console/muse/redeem",
+      {
+        method: "POST",
+        body: JSON.stringify({ code }),
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer test-muse-connector-token"
+        }
+      },
+      museEnv
+    );
+    const first = await redeem();
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toEqual({ subject: `wzrdmail:${seeded.org_id}` });
+    expect((await redeem()).status).toBe(401);
+  });
+
+  it("never redeems a connector handoff without the Air server credential", async () => {
+    const response = await app.request(
+      "/v0/console/muse/redeem",
+      { method: "POST", body: JSON.stringify({ code: `wmc_${"a".repeat(64)}` }), headers: { "content-type": "application/json" } },
+      env
+    );
+    expect(response.status).toBe(401);
+  });
+});
+
 const twEnv = new Proxy(env, {
   get: (target, prop) =>
     prop === "THIRDWEB_CLIENT_ID" ? "test-client" : Reflect.get(target, prop)

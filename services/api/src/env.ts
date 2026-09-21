@@ -8,4 +8,10 @@ export interface Env {
   EMAIL?: SendEmail;
   /** thirdweb project client id; when set, email OTPs go through thirdweb auth. */
   THIRDWEB_CLIENT_ID?: string;
+  /**
+   * Shared, server-to-server credential for the Air × Muse connector.
+   * It never reaches the console browser.  Its sole purpose is redemption of
+   * short-lived WZRDMail identity and phone-verification handoffs.
+   */
+  MUSE_CONNECTOR_TOKEN?: string;
 }
