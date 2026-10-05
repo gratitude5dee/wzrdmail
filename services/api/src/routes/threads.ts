@@ -65,6 +65,16 @@ async function listThreads(
     conditions.push("(subject LIKE ? ESCAPE '\\' OR preview LIKE ? ESCAPE '\\')");
     binds.push(like, like);
   }
+  // `labels` query param: comma-separated, AND semantics (same as
+  // GET /inboxes/:id/messages — every listed label must be on the thread).
+  const labels = (c.req.query("labels") ?? "")
+    .split(",")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  for (const label of labels) {
+    conditions.push("EXISTS (SELECT 1 FROM json_each(threads.labels) WHERE json_each.value = ?)");
+    binds.push(label);
+  }
   if (cursor) {
     conditions.push("(last_message_at < ? OR (last_message_at = ? AND thread_id < ?))");
     binds.push(cursor.v, cursor.v, cursor.id);
