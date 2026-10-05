@@ -62,6 +62,9 @@ async function seedMessage(
     labels: string[];
     created_at: string;
     raw_key: string | null;
+    deleted_at: string | null;
+    thread_labels: string[];
+    thread_deleted_at: string | null;
   }>
 ): Promise<{ msg_id: string; thread_id: string }> {
   const msgId = overrides?.msg_id ?? `msg_${crypto.randomUUID().slice(0, 12)}`;
@@ -74,8 +77,8 @@ async function seedMessage(
     .first();
   if (!existingThread) {
     await env.DB.prepare(
-      `INSERT INTO threads (thread_id, org_id, pod_id, inbox_id, subject, normalized_subject, preview, last_message_at, message_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      `INSERT INTO threads (thread_id, org_id, pod_id, inbox_id, subject, normalized_subject, preview, last_message_at, message_count, labels, deleted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
     )
       .bind(
         threadId,
@@ -86,14 +89,16 @@ async function seedMessage(
         (overrides?.subject ?? "hello").toLowerCase(),
         overrides?.text ?? "hi",
         createdAt,
+        JSON.stringify(overrides?.thread_labels ?? []),
+        overrides?.thread_deleted_at ?? null,
         createdAt,
         createdAt
       )
       .run();
   }
   await env.DB.prepare(
-    `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, subject, text, labels, raw_key, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, subject, text, labels, raw_key, deleted_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       msgId,
@@ -107,6 +112,7 @@ async function seedMessage(
       overrides?.text ?? "hi",
       JSON.stringify(overrides?.labels ?? []),
       overrides?.raw_key ?? null,
+      overrides?.deleted_at ?? null,
       createdAt,
       createdAt
     )
@@ -557,6 +563,101 @@ describe("thread endpoints (§M2)", () => {
     const msg = await seedMessage(theirs);
     const key = await seedKey(mine.org_id);
     const res = await app.request(`/v0/threads/${msg.thread_id}`, authed(key), env);
+    expect(res.status).toBe(404);
+  });
+
+  it("filters threads by labels with AND semantics", async () => {
+    const inbox = await seedInbox({ address: `tl-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const both = await seedMessage(inbox, { thread_labels: ["billing", "urgent"] });
+    const one = await seedMessage(inbox, { thread_labels: ["billing"] });
+    await seedMessage(inbox, { thread_labels: ["other"] });
+
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/threads`;
+
+    const billing = (await (
+      await app.request(`${base}?labels=billing`, authed(key), env)
+    ).json()) as { threads: { thread_id: string }[] };
+    expect(billing.threads.map((t) => t.thread_id).sort()).toEqual(
+      [both.thread_id, one.thread_id].sort()
+    );
+
+    // AND semantics: every listed label must be present on the thread.
+    const multi = (await (
+      await app.request(`${base}?labels=billing,urgent`, authed(key), env)
+    ).json()) as { threads: { thread_id: string }[] };
+    expect(multi.threads.map((t) => t.thread_id)).toEqual([both.thread_id]);
+
+    const noMatch = (await (
+      await app.request(`${base}?labels=nosuch`, authed(key), env)
+    ).json()) as { threads: { thread_id: string }[] };
+    expect(noMatch.threads).toEqual([]);
+  });
+
+  it("filters thread search results by labels", async () => {
+    const inbox = await seedInbox({ address: `tls-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const hit = await seedMessage(inbox, {
+      subject: "Zebra quarterly",
+      thread_labels: ["finance"]
+    });
+    await seedMessage(inbox, { subject: "Zebra monthly", thread_labels: [] });
+
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/threads`;
+    const res = (await (
+      await app.request(`${base}/search?query=zebra&labels=finance`, authed(key), env)
+    ).json()) as { threads: { thread_id: string }[] };
+    expect(res.threads.map((t) => t.thread_id)).toEqual([hit.thread_id]);
+
+    const unfiltered = (await (
+      await app.request(`${base}/search?query=zebra`, authed(key), env)
+    ).json()) as { threads: { thread_id: string }[] };
+    expect(unfiltered.threads).toHaveLength(2);
+  });
+});
+
+describe("inbox counts", () => {
+  it("returns folder badge counts for an inbox", async () => {
+    const inbox = await seedInbox({ address: `cnt-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+
+    // unread: live messages carrying the `unread` label only.
+    await seedMessage(inbox, { labels: ["unread"] });
+    await seedMessage(inbox, { labels: ["unread", "received"] });
+    await seedMessage(inbox, { labels: [] });
+    await seedMessage(inbox, { labels: ["unread"], deleted_at: NOW });
+
+    // spam: live `spam`-labeled threads; trashed spam counts toward trash.
+    await seedMessage(inbox, { thread_labels: ["spam"] });
+    await seedMessage(inbox, { thread_labels: ["spam"], thread_deleted_at: NOW });
+
+    for (let i = 0; i < 2; i++) {
+      await env.DB.prepare(
+        "INSERT INTO drafts (draft_id, org_id, pod_id, inbox_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+        .bind(`draft_${crypto.randomUUID().slice(0, 8)}`, inbox.org_id, inbox.pod_id, inbox.inbox_id, NOW, NOW)
+        .run();
+    }
+
+    const res = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/counts`,
+      authed(key),
+      env
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, number>;
+    expect(body).toEqual({ unread: 2, spam: 1, drafts: 2, trash: 1 });
+  });
+
+  it("hides foreign inboxes", async () => {
+    const mine = await seedInbox({ address: `cm-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const theirs = await seedInbox({ address: `ct-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(mine.org_id);
+    const res = await app.request(
+      `/v0/inboxes/${encodeURIComponent(theirs.inbox_id)}/counts`,
+      authed(key),
+      env
+    );
     expect(res.status).toBe(404);
   });
 });

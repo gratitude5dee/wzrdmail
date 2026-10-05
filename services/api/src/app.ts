@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import type { Env } from "./env.js";
 import { agent } from "./routes/agent.js";
 import { consoleAuth } from "./routes/console.js";
+import { counts } from "./routes/counts.js";
 import { domains } from "./routes/domains.js";
 import { drafts } from "./routes/drafts.js";
 import { health } from "./routes/health.js";
@@ -55,6 +56,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/v0", health);
   app.route("/v0", agent);
   app.route("/v0", consoleAuth);
+  app.route("/v0", counts);
   app.route("/v0", domains);
   app.route("/v0", drafts);
   app.route("/v0", inboxes);
