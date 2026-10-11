@@ -76,3 +76,19 @@ export function numberFlag(
   if (!Number.isFinite(n)) throw new UsageError(`--${name} must be a number`);
   return n;
 }
+
+/** `--name` (true), `--name true|false`, `--name=true|false`, or 1/0/yes/no. */
+export function boolFlag(
+  flags: Record<string, string | boolean>,
+  name: string
+): boolean | undefined {
+  const value = flags[name];
+  if (value === undefined) return undefined;
+  if (value === true) return true;
+  if (typeof value === "string") {
+    const v = value.toLowerCase();
+    if (v === "true" || v === "1" || v === "yes") return true;
+    if (v === "false" || v === "0" || v === "no") return false;
+  }
+  throw new UsageError(`--${name} must be true or false`);
+}

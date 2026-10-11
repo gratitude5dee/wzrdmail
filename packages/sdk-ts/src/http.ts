@@ -18,6 +18,8 @@ export interface RequestOptions {
   query?: Record<string, string | number | string[] | undefined>;
   body?: unknown;
   auth?: boolean;
+  /** Extra request headers, e.g. Idempotency-Key on batch-send. */
+  headers?: Record<string, string>;
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -57,6 +59,11 @@ export class HttpClient {
         );
       }
       headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+    if (options.headers) {
+      for (const [key, value] of Object.entries(options.headers)) {
+        headers[key] = value;
+      }
     }
     const init: RequestInit = { method: options.method, headers };
     if (options.body !== undefined) {

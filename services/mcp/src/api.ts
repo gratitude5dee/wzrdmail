@@ -5,6 +5,7 @@ export interface ApiRequest {
   path: string;
   query?: Record<string, string | number | undefined>;
   body?: unknown;
+  headers?: Record<string, string>;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -36,7 +37,8 @@ export class ApiClient {
     }
     const key = typeof this.apiKey === "function" ? this.apiKey() : this.apiKey;
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${key}`
+      Authorization: `Bearer ${key}`,
+      ...req.headers
     };
     let body: string | undefined;
     if (req.body !== undefined) {

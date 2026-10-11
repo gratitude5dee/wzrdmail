@@ -115,7 +115,7 @@ export const SendAttachmentInput = z
   })
   .refine((a) => (a.content === undefined) !== (a.path === undefined), {
     message: "provide exactly one of content or path"
-    });
+  });
 export type SendAttachmentInput = z.infer<typeof SendAttachmentInput>;
 
 /** `Name <a@b>` or bare address; arrays join into one Reply-To header. */
@@ -123,6 +123,14 @@ export const ReplyTo = z.union([
   z.string().email(),
   z.array(z.string().email()).min(1).max(50)
 ]);
+export type ReplyTo = z.infer<typeof ReplyTo>;
+
+/** Resend-style template reference on a send: body comes from the template. */
+export const SendTemplateInput = z.object({
+  id: z.string().min(1),
+  variables: z.record(z.unknown()).optional()
+});
+export type SendTemplateInput = z.infer<typeof SendTemplateInput>;
 
 export const SendMessageInput = z.object({
   to: z.array(z.string().email()).min(1),
@@ -135,6 +143,8 @@ export const SendMessageInput = z.object({
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
+  /** Mutually exclusive with text/html server-side: body rendered from template. */
+  template: SendTemplateInput.optional(),
   client_id: z.string().max(256).optional(),
   send_at: IsoTimestamp.optional()
 });
@@ -271,7 +281,7 @@ export const CreateDraftInput = z.object({
   subject: z.string().max(998).optional(),
   text: z.string().optional(),
   html: z.string().optional(),
-  reply_to: z.string().email().optional(),
+  reply_to: ReplyTo.optional(),
   headers: z.record(z.string()).optional(),
   labels: z.array(z.string()).optional(),
   in_reply_to: z.string().optional(),
@@ -393,6 +403,9 @@ export const EventType = z.enum([
   "message.opened",
   "message.clicked",
   "domain.verified",
+  "domain.created",
+  "domain.deleted",
+  "domain.failed",
   "suppression.added",
   "suppression.removed"
 ]);
@@ -472,3 +485,44 @@ export const ShareLink = z.object({
   created_at: IsoTimestamp
 });
 export type ShareLink = z.infer<typeof ShareLink>;
+
+export const TemplateStatus = z.enum(["draft", "published"]);
+export type TemplateStatus = z.infer<typeof TemplateStatus>;
+
+export const Template = z.object({
+  template_id: z.string(),
+  organization_id: z.string().nullable().optional(),
+  name: z.string(),
+  subject: z.string().nullable().optional(),
+  from: z.string().nullable().optional(),
+  reply_to: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
+  text: z.string().nullable().optional(),
+  status: TemplateStatus,
+  client_id: z.string().nullable().optional(),
+  published_at: IsoTimestamp.nullable().optional(),
+  created_at: IsoTimestamp,
+  updated_at: IsoTimestamp
+});
+export type Template = z.infer<typeof Template>;
+
+export const CreateTemplateInput = z.object({
+  name: z.string().min(1).max(128),
+  subject: z.string().optional(),
+  from: z.string().optional(),
+  reply_to: z.string().email().optional(),
+  html: z.string().optional(),
+  text: z.string().optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreateTemplateInput = z.infer<typeof CreateTemplateInput>;
+
+export const UpdateTemplateInput = z.object({
+  name: z.string().min(1).max(128).optional(),
+  subject: z.string().nullable().optional(),
+  from: z.string().nullable().optional(),
+  reply_to: z.string().email().nullable().optional(),
+  html: z.string().nullable().optional(),
+  text: z.string().nullable().optional()
+});
+export type UpdateTemplateInput = z.infer<typeof UpdateTemplateInput>;

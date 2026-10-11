@@ -1,10 +1,16 @@
+import { readFileSync } from "node:fs";
 import {
   WzrdMailClient,
   WzrdmailError,
+  type Attachment,
+  type BatchSendItemResult,
   type Draft,
   type FetchLike,
   type Inbox,
   type Message,
+  type MessageEvent,
+  type Suppression,
+  type Template,
   type Thread,
   type Webhook
 } from "wzrdmail";
@@ -12,6 +18,7 @@ import { clearApiKey, configPath, readStoredApiKey, storeApiKey } from "./config
 import { tailEvents, type WebSocketFactory } from "./events.js";
 import {
   UsageError,
+  boolFlag,
   listFlag,
   numberFlag,
   parseArgs,
@@ -37,8 +44,15 @@ Commands:
   inboxes list [--limit N] [--page-token TOKEN]
   inboxes create [--username U] [--domain D] [--display-name NAME] [--client-id ID]
   inboxes get <inbox_id>
-  messages send <inbox_id> --to a@b.com[,c@d.com] [--subject S] [--text T] [--html H] [--cc ..] [--bcc ..] [--client-id ID]
+  inboxes update <inbox_id> [--display-name N] [--open-tracking true|false] [--click-tracking true|false]
+  messages send <inbox_id> --to a@b.com[,c@d.com] [--subject S] [--text T] [--html H] [--cc ..] [--bcc ..] [--reply-to a[,b]] [--template-id ID --template-vars JSON] [--send-at TS] [--client-id ID]
+  messages batch-send <inbox_id> --file messages.json [--idempotency-key KEY]
   messages list <inbox_id> [--limit N] [--page-token TOKEN] [--labels l1,l2] [--before TS] [--after TS]
+  messages cancel <inbox_id> <message_id>
+  messages reschedule <inbox_id> <message_id> --send-at ISO8601
+  messages share <inbox_id> <message_id> [--expires-in SECONDS]
+  messages events <inbox_id> <message_id>
+  messages attachments <inbox_id> <message_id>
   threads list <inbox_id> [--limit N] [--page-token TOKEN]
   threads get <inbox_id> <thread_id>
   threads search <inbox_id> --query Q [--limit N] [--page-token TOKEN]
@@ -49,15 +63,22 @@ Commands:
   auth logout                  delete the stored key
   inboxes delete <inbox_id>
   messages get <inbox_id> <message_id>
-  messages reply <inbox_id> <message_id> [--text T] [--html H] [--cc ..] [--bcc ..] [--all]
-  messages forward <inbox_id> <message_id> --to a@b.com[,c@d.com] [--text T]
+  messages reply <inbox_id> <message_id> [--text T] [--html H] [--cc ..] [--bcc ..] [--reply-to a[,b]] [--all]
+  messages forward <inbox_id> <message_id> --to a@b.com[,c@d.com] [--text T] [--reply-to a[,b]]
   drafts list <inbox_id>
-  drafts create <inbox_id> [--to ..] [--subject S] [--text T] [--html H]
+  drafts create <inbox_id> [--to ..] [--subject S] [--text T] [--html H] [--reply-to a[,b]]
   drafts send <inbox_id> <draft_id>
   webhooks list|create|delete|test  (create: --url URL --event-types t1,t2; test: <webhook_id>)
+  webhooks rotate-secret <webhook_id>
+  webhooks events <webhook_id> [--limit N] [--page-token TOKEN]
   domains list|add|verify|records  (add: --domain D; verify/records: <domain_id>)
+  domains update <domain_id> [--custom-return-path PATH]
   pods list|create             (create: [--name NAME])
-  keys list|create|revoke      (create: [--name NAME] [--pod-id ID] [--inbox-id ADDR] [--permissions read,drafts]; revoke: <key_id>)
+  keys list|create|update|revoke (create: [--name NAME] [--pod-id ID] [--inbox-id ADDR] [--permissions read,drafts]; update: <key_id> [--name NAME]; revoke: <key_id>)
+  suppressions list [--reason bounce|complaint|manual] [--limit N] [--page-token TOKEN]
+  suppressions add|remove <address>
+  suppressions batch [--add a@b,c@d] [--remove e@f,g@h]
+  templates list|get|create|update|delete|publish|duplicate  (create: --name N [--subject S] [--from F] [--reply-to R] [--html H] [--text T])
   usage [--month YYYY-MM]
   events tail [--inbox-ids a@b,c@d] [--max N]
 
@@ -118,6 +139,23 @@ const threadRows = (threads: Thread[]): (string | number | undefined)[][] =>
 const draftRows = (drafts: Draft[]): (string | undefined)[][] =>
   drafts.map((d) => [d.draft_id, d.to?.join(","), d.subject, d.updated_at]);
 
+const suppressionRows = (suppressions: Suppression[]): (string | undefined)[][] =>
+  suppressions.map((s) => [s.address, s.reason, s.source_msg_id ?? "", s.created_at]);
+
+const eventRows = (events: MessageEvent[]): (string | undefined)[][] =>
+  events.map((e) => [e.event_id, e.type, e.created_at]);
+
+const attachmentRows = (attachments: Attachment[]): (string | number | undefined)[][] =>
+  attachments.map((a) => [a.attachment_id, a.filename, a.content_type, a.size, a.content_id ?? ""]);
+
+const templateRows = (templates: Template[]): (string | undefined)[][] =>
+  templates.map((t) => [t.template_id, t.name, t.status, t.updated_at]);
+
+const batchResultRows = (results: BatchSendItemResult[]): (string | number | undefined)[][] =>
+  results.map((r) =>
+    "error" in r ? [r.index, "", `${r.error.name}: ${r.error.message}`] : [r.index, r.message_id, ""]
+  );
+
 const webhookRows = (webhooks: Webhook[]): (string | boolean | undefined)[][] =>
   webhooks.map((w) => [w.webhook_id, w.url, w.event_types.join(","), w.enabled]);
 
@@ -162,12 +200,38 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     emit(ctx, { deleted: true, inbox_id: inboxId }, () => `deleted ${inboxId}`);
     return;
   }
+  if (resource === "inboxes" && action === "update") {
+    const inboxId = rest[0];
+    if (!inboxId) throw new UsageError("usage: wzrdmail inboxes update <inbox_id>");
+    const inbox = await ctx.client.inboxes.update(inboxId, {
+      display_name: stringFlag(flags, "display-name"),
+      x_open_tracking: boolFlag(flags, "open-tracking"),
+      x_click_tracking: boolFlag(flags, "click-tracking")
+    });
+    emit(ctx, inbox, () => formatRecord(inbox));
+    return;
+  }
 
   if (resource === "messages" && action === "send") {
     const inboxId = rest[0];
     if (!inboxId) throw new UsageError("usage: wzrdmail messages send <inbox_id> --to …");
     const to = listFlag(flags, "to");
     if (!to || to.length === 0) throw new UsageError("--to is required");
+    const replyTo = listFlag(flags, "reply-to");
+    const templateId = stringFlag(flags, "template-id");
+    const templateVars = stringFlag(flags, "template-vars");
+    let variables: Record<string, unknown> | undefined;
+    if (templateVars !== undefined) {
+      try {
+        const parsed = JSON.parse(templateVars) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error();
+        }
+        variables = parsed as Record<string, unknown>;
+      } catch {
+        throw new UsageError("--template-vars must be a JSON object");
+      }
+    }
     const message = await ctx.client.inboxes.messages.send(inboxId, {
       to,
       cc: listFlag(flags, "cc"),
@@ -175,9 +239,108 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
       subject: stringFlag(flags, "subject") ?? "",
       text: stringFlag(flags, "text"),
       html: stringFlag(flags, "html"),
+      reply_to: replyTo === undefined ? undefined : replyTo.length === 1 ? replyTo[0] : replyTo,
+      template: templateId === undefined ? undefined : { id: templateId, variables },
+      send_at: stringFlag(flags, "send-at"),
       client_id: stringFlag(flags, "client-id")
     });
     emit(ctx, message, () => formatRecord(message));
+    return;
+  }
+
+  if (resource === "messages" && action === "batch-send") {
+    const inboxId = rest[0];
+    if (!inboxId) {
+      throw new UsageError("usage: wzrdmail messages batch-send <inbox_id> --file messages.json");
+    }
+    const file = requireStringFlag(flags, "file");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch (error) {
+      throw new UsageError(`cannot read --file ${file}: ${(error as Error).message}`);
+    }
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (parsed as { messages?: unknown[] }).messages;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new UsageError("--file must contain a JSON array or {messages:[…]} of send inputs");
+    }
+    const result = await ctx.client.inboxes.messages.batchSend(
+      inboxId,
+      items as Parameters<typeof ctx.client.inboxes.messages.batchSend>[1],
+      { idempotencyKey: stringFlag(flags, "idempotency-key") }
+    );
+    emit(ctx, result, () =>
+      formatTable(["INDEX", "MESSAGE_ID", "ERROR"], batchResultRows(result.results))
+    );
+    return;
+  }
+
+  if (resource === "messages" && action === "cancel") {
+    const [inboxId, messageId] = rest;
+    if (!inboxId || !messageId) {
+      throw new UsageError("usage: wzrdmail messages cancel <inbox_id> <message_id>");
+    }
+    const message = await ctx.client.inboxes.messages.cancel(inboxId, messageId);
+    emit(ctx, message, () => formatRecord(message));
+    return;
+  }
+
+  if (resource === "messages" && action === "reschedule") {
+    const [inboxId, messageId] = rest;
+    if (!inboxId || !messageId) {
+      throw new UsageError(
+        "usage: wzrdmail messages reschedule <inbox_id> <message_id> --send-at TS"
+      );
+    }
+    const message = await ctx.client.inboxes.messages.reschedule(
+      inboxId,
+      messageId,
+      requireStringFlag(flags, "send-at")
+    );
+    emit(ctx, message, () => formatRecord(message));
+    return;
+  }
+
+  if (resource === "messages" && action === "share") {
+    const [inboxId, messageId] = rest;
+    if (!inboxId || !messageId) {
+      throw new UsageError(
+        "usage: wzrdmail messages share <inbox_id> <message_id> [--expires-in SECONDS]"
+      );
+    }
+    const link = await ctx.client.inboxes.messages.share(inboxId, messageId, {
+      expires_in: numberFlag(flags, "expires-in")
+    });
+    emit(ctx, link, () => formatRecord(link));
+    return;
+  }
+
+  if (resource === "messages" && action === "events") {
+    const [inboxId, messageId] = rest;
+    if (!inboxId || !messageId) {
+      throw new UsageError("usage: wzrdmail messages events <inbox_id> <message_id>");
+    }
+    const events = await ctx.client.inboxes.messages.events(inboxId, messageId);
+    emit(ctx, { events }, () =>
+      formatTable(["EVENT_ID", "TYPE", "CREATED_AT"], eventRows(events))
+    );
+    return;
+  }
+
+  if (resource === "messages" && action === "attachments") {
+    const [inboxId, messageId] = rest;
+    if (!inboxId || !messageId) {
+      throw new UsageError("usage: wzrdmail messages attachments <inbox_id> <message_id>");
+    }
+    const attachments = await ctx.client.inboxes.messages.listAttachments(inboxId, messageId);
+    emit(ctx, { attachments }, () =>
+      formatTable(
+        ["ATTACHMENT_ID", "FILENAME", "CONTENT_TYPE", "SIZE", "CONTENT_ID"],
+        attachmentRows(attachments)
+      )
+    );
     return;
   }
   if (resource === "messages" && action === "list") {
@@ -224,11 +387,13 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     if (!inboxId || !messageId) {
       throw new UsageError("usage: wzrdmail messages reply <inbox_id> <message_id> [--text T]");
     }
+    const replyTo = listFlag(flags, "reply-to");
     const input = {
       text: stringFlag(flags, "text"),
       html: stringFlag(flags, "html"),
       cc: listFlag(flags, "cc"),
       bcc: listFlag(flags, "bcc"),
+      reply_to: replyTo === undefined ? undefined : replyTo.length === 1 ? replyTo[0] : replyTo,
       client_id: stringFlag(flags, "client-id")
     };
     const message =
@@ -245,12 +410,14 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     }
     const to = listFlag(flags, "to");
     if (!to || to.length === 0) throw new UsageError("--to is required");
+    const replyTo = listFlag(flags, "reply-to");
     const message = await ctx.client.inboxes.messages.forward(inboxId, messageId, {
       to,
       cc: listFlag(flags, "cc"),
       bcc: listFlag(flags, "bcc"),
       text: stringFlag(flags, "text"),
       html: stringFlag(flags, "html"),
+      reply_to: replyTo === undefined ? undefined : replyTo.length === 1 ? replyTo[0] : replyTo,
       client_id: stringFlag(flags, "client-id")
     });
     emit(ctx, message, () => formatRecord(message));
@@ -290,6 +457,7 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
   if (resource === "drafts" && action === "create") {
     const inboxId = rest[0];
     if (!inboxId) throw new UsageError("usage: wzrdmail drafts create <inbox_id> [--to …]");
+    const replyToDraft = listFlag(flags, "reply-to");
     const draft = await ctx.client.inboxes.drafts.create(inboxId, {
       to: listFlag(flags, "to"),
       cc: listFlag(flags, "cc"),
@@ -297,6 +465,12 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
       subject: stringFlag(flags, "subject"),
       text: stringFlag(flags, "text"),
       html: stringFlag(flags, "html"),
+      reply_to:
+        replyToDraft === undefined
+          ? undefined
+          : replyToDraft.length === 1
+            ? replyToDraft[0]
+            : replyToDraft,
       client_id: stringFlag(flags, "client-id")
     });
     emit(ctx, draft, () => formatRecord(draft));
@@ -350,6 +524,24 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     emit(ctx, result, () => formatRecord(result));
     return;
   }
+  if (resource === "webhooks" && action === "rotate-secret") {
+    const webhookId = rest[0];
+    if (!webhookId) {
+      throw new UsageError("usage: wzrdmail webhooks rotate-secret <webhook_id>");
+    }
+    const result = await ctx.client.webhooks.rotateSecret(webhookId);
+    emit(ctx, result, () => formatRecord(result));
+    return;
+  }
+  if (resource === "webhooks" && action === "events") {
+    const webhookId = rest[0];
+    if (!webhookId) throw new UsageError("usage: wzrdmail webhooks events <webhook_id>");
+    const page = await ctx.client.webhooks.events(webhookId, pagination);
+    emit(ctx, page, () =>
+      formatTable(["EVENT_ID", "TYPE", "CREATED_AT"], eventRows(page.events))
+    );
+    return;
+  }
 
   if (resource === "domains" && action === "list") {
     const page = await ctx.client.domains.list(pagination);
@@ -387,6 +579,20 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
         records.map((r) => [r.type, r.name, r.value])
       )
     );
+    return;
+  }
+  if (resource === "domains" && action === "update") {
+    const domainId = rest[0];
+    if (!domainId) {
+      throw new UsageError(
+        "usage: wzrdmail domains update <domain_id> [--custom-return-path PATH]"
+      );
+    }
+    const updated = await ctx.client.domains.update(domainId, {
+      custom_return_path: stringFlag(flags, "custom-return-path"),
+      client_id: stringFlag(flags, "client-id")
+    });
+    emit(ctx, updated, () => formatRecord(updated));
     return;
   }
 
@@ -430,11 +636,138 @@ async function dispatch(ctx: Ctx, argv: string[]): Promise<void> {
     emit(ctx, key, () => formatRecord(key));
     return;
   }
+  if (resource === "keys" && action === "update") {
+    const keyId = rest[0];
+    if (!keyId) throw new UsageError("usage: wzrdmail keys update <key_id> [--name NAME]");
+    const result = await ctx.client.apiKeys.update(keyId, {
+      name: stringFlag(flags, "name")
+    });
+    emit(ctx, result, () => formatRecord(result));
+    return;
+  }
   if (resource === "keys" && action === "revoke") {
     const keyId = rest[0];
     if (!keyId) throw new UsageError("usage: wzrdmail keys revoke <key_id>");
     await ctx.client.apiKeys.delete(keyId);
     emit(ctx, { revoked: true, api_key_id: keyId }, () => `revoked ${keyId}`);
+    return;
+  }
+
+  if (resource === "suppressions" && action === "list") {
+    const page = await ctx.client.suppressions.list({
+      ...pagination,
+      reason: stringFlag(flags, "reason")
+    });
+    emit(ctx, page, () =>
+      formatTable(
+        ["ADDRESS", "REASON", "SOURCE_MSG_ID", "CREATED_AT"],
+        suppressionRows(page.suppressions)
+      )
+    );
+    return;
+  }
+  if (resource === "suppressions" && action === "add") {
+    const address = rest[0];
+    if (!address) throw new UsageError("usage: wzrdmail suppressions add <address>");
+    const suppression = await ctx.client.suppressions.add({ address });
+    emit(ctx, suppression, () => formatRecord(suppression));
+    return;
+  }
+  if (resource === "suppressions" && action === "remove") {
+    const address = rest[0];
+    if (!address) throw new UsageError("usage: wzrdmail suppressions remove <address>");
+    await ctx.client.suppressions.remove(address);
+    emit(ctx, { removed: true, address }, () => `removed ${address}`);
+    return;
+  }
+  if (resource === "suppressions" && action === "batch") {
+    const add = listFlag(flags, "add");
+    const remove = listFlag(flags, "remove");
+    if (!add?.length && !remove?.length) {
+      throw new UsageError("suppressions batch needs --add and/or --remove lists");
+    }
+    const result = await ctx.client.suppressions.batch({ add, remove });
+    emit(ctx, result, () => {
+      const lines = [`added ${result.added.length}, removed ${result.removed.length}`];
+      if (result.added.length > 0) {
+        lines.push(
+          formatTable(
+            ["ADDRESS", "REASON", "SOURCE_MSG_ID", "CREATED_AT"],
+            suppressionRows(result.added)
+          )
+        );
+      }
+      for (const address of result.removed) lines.push(`removed ${address}`);
+      return lines.join("\n");
+    });
+    return;
+  }
+
+  if (resource === "templates" && action === "list") {
+    const page = await ctx.client.templates.list(pagination);
+    emit(ctx, page, () =>
+      formatTable(
+        ["TEMPLATE_ID", "NAME", "STATUS", "UPDATED_AT"],
+        templateRows(page.templates)
+      )
+    );
+    return;
+  }
+  if (resource === "templates" && action === "create") {
+    const template = await ctx.client.templates.create({
+      name: requireStringFlag(flags, "name"),
+      subject: stringFlag(flags, "subject"),
+      from: stringFlag(flags, "from"),
+      reply_to: stringFlag(flags, "reply-to"),
+      html: stringFlag(flags, "html"),
+      text: stringFlag(flags, "text"),
+      client_id: stringFlag(flags, "client-id")
+    });
+    emit(ctx, template, () => formatRecord(template));
+    return;
+  }
+  if (resource === "templates" && action === "get") {
+    const templateId = rest[0];
+    if (!templateId) throw new UsageError("usage: wzrdmail templates get <template_id>");
+    const template = await ctx.client.templates.get(templateId);
+    emit(ctx, template, () => formatRecord(template));
+    return;
+  }
+  if (resource === "templates" && action === "update") {
+    const templateId = rest[0];
+    if (!templateId) {
+      throw new UsageError("usage: wzrdmail templates update <template_id> [--name N] …");
+    }
+    const template = await ctx.client.templates.update(templateId, {
+      name: stringFlag(flags, "name"),
+      subject: stringFlag(flags, "subject"),
+      from: stringFlag(flags, "from"),
+      reply_to: stringFlag(flags, "reply-to"),
+      html: stringFlag(flags, "html"),
+      text: stringFlag(flags, "text")
+    });
+    emit(ctx, template, () => formatRecord(template));
+    return;
+  }
+  if (resource === "templates" && action === "delete") {
+    const templateId = rest[0];
+    if (!templateId) throw new UsageError("usage: wzrdmail templates delete <template_id>");
+    await ctx.client.templates.delete(templateId);
+    emit(ctx, { deleted: true, template_id: templateId }, () => `deleted ${templateId}`);
+    return;
+  }
+  if (resource === "templates" && action === "publish") {
+    const templateId = rest[0];
+    if (!templateId) throw new UsageError("usage: wzrdmail templates publish <template_id>");
+    const template = await ctx.client.templates.publish(templateId);
+    emit(ctx, template, () => formatRecord(template));
+    return;
+  }
+  if (resource === "templates" && action === "duplicate") {
+    const templateId = rest[0];
+    if (!templateId) throw new UsageError("usage: wzrdmail templates duplicate <template_id>");
+    const template = await ctx.client.templates.duplicate(templateId);
+    emit(ctx, template, () => formatRecord(template));
     return;
   }
 

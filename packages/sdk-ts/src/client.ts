@@ -1,10 +1,15 @@
 import type {
   AgentSignUpInput,
   AgentVerifyInput,
+  Attachment,
   CreateInboxInput,
   Inbox,
   Message,
+  MessageEvent,
   SendMessageInput,
+  ShareLink,
+  Suppression,
+  Template,
   Thread
 } from "@wzrdmail/core";
 import { z } from "zod";
@@ -14,10 +19,15 @@ import type {
   AgentVerifyResponse,
   ApiKey,
   AuthMe,
+  BatchSendOptions,
+  BatchSendResult,
+  BatchSuppressionInput,
   CreateApiKeyInput,
   CreateDomainInput,
   CreateDraftInput,
   CreatePodInput,
+  CreateSuppressionInput,
+  CreateTemplateInput,
   CreateWebhookInput,
   Domain,
   Draft,
@@ -25,9 +35,18 @@ import type {
   ListMessagesParams,
   ListParams,
   ListResponse,
+  ListSuppressionsParams,
   Pod,
   ReplyMessageInput,
+  RotateWebhookSecretResult,
+  ShareMessageOptions,
+  SuppressionBatchResult,
+  UpdateApiKeyInput,
+  UpdateApiKeyResult,
+  UpdateDomainInput,
+  UpdateInboxInput,
   UpdateMessageInput,
+  UpdateTemplateInput,
   Usage,
   Webhook,
   WebhookTestResult
@@ -128,6 +147,74 @@ class MessagesResource {
       method: "PATCH",
       path: `/v0/inboxes/${encodePath(inboxId)}/messages/${encodePath(messageId)}`,
       body: input
+    });
+  }
+
+  /** Up to 100 sends in one call; per-item `{index, ...Message}|{index, error}` results. */
+  batchSend(
+    inboxId: string,
+    messages: WithClientIdAlias<SendMessageInput>[],
+    options: BatchSendOptions = {}
+  ): Promise<BatchSendResult> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/inboxes/${encodePath(inboxId)}/messages/batch-send`,
+      body: { messages: messages.map((m) => mapClientId(m)) },
+      headers:
+        options.idempotencyKey === undefined
+          ? undefined
+          : { "Idempotency-Key": options.idempotencyKey }
+    });
+  }
+
+  /** Cancel a scheduled send without trashing it (state → `cancelled`). */
+  cancel(inboxId: string, messageId: string): Promise<Message> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/inboxes/${encodePath(inboxId)}/messages/${encodePath(messageId)}/cancel`
+    });
+  }
+
+  /** PATCH send_at: reschedule a scheduled send or re-arm a cancelled one. */
+  reschedule(
+    inboxId: string,
+    messageId: string,
+    sendAt: string
+  ): Promise<Message> {
+    return this.update(inboxId, messageId, { send_at: sendAt });
+  }
+
+  /** Attachment metadata for a message (inbound and outbound). */
+  async listAttachments(
+    inboxId: string,
+    messageId: string
+  ): Promise<Attachment[]> {
+    const res = await this.http.request<{ attachments: Attachment[] }>({
+      method: "GET",
+      path: `/v0/inboxes/${encodePath(inboxId)}/messages/${encodePath(messageId)}/attachments`
+    });
+    return res.attachments;
+  }
+
+  /** Per-message event timeline (scheduled→sent→delivered/bounced/…). */
+  async events(inboxId: string, messageId: string): Promise<MessageEvent[]> {
+    const res = await this.http.request<{ events: MessageEvent[] }>({
+      method: "GET",
+      path: `/v0/inboxes/${encodePath(inboxId)}/messages/${encodePath(messageId)}/events`
+    });
+    return res.events;
+  }
+
+  /** Mint a public, expiring share link rendering the message's sanitized HTML. */
+  share(
+    inboxId: string,
+    messageId: string,
+    options: ShareMessageOptions = {}
+  ): Promise<ShareLink> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/inboxes/${encodePath(inboxId)}/messages/${encodePath(messageId)}/share`,
+      body: { expires_in: options.expires_in }
     });
   }
 }
@@ -264,6 +351,14 @@ class InboxesResource {
       path: `/v0/inboxes/${encodePath(inboxId)}`
     });
   }
+
+  update(inboxId: string, input: UpdateInboxInput): Promise<Inbox> {
+    return this.http.request({
+      method: "PATCH",
+      path: `/v0/inboxes/${encodePath(inboxId)}`,
+      body: input
+    });
+  }
 }
 
 class WebhooksResource {
@@ -296,6 +391,26 @@ class WebhooksResource {
     return this.http.request({
       method: "POST",
       path: `/v0/webhooks/${encodePath(webhookId)}/test`
+    });
+  }
+
+  /** Rotate the signing secret; the new plaintext is returned exactly once. */
+  rotateSecret(webhookId: string): Promise<RotateWebhookSecretResult> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/webhooks/${encodePath(webhookId)}/rotate-secret`
+    });
+  }
+
+  /** Event payloads matching this webhook's org/pod/inbox/event_type filter. */
+  events(
+    webhookId: string,
+    params: ListParams = {}
+  ): Promise<ListResponse<"events", MessageEvent>> {
+    return this.http.request({
+      method: "GET",
+      path: `/v0/webhooks/${encodePath(webhookId)}/events`,
+      query: { ...params }
     });
   }
 }
@@ -351,6 +466,17 @@ class DomainsResource {
     return this.http.request({
       method: "GET",
       path: `/v0/domains/${encodePath(domainId)}`
+    });
+  }
+
+  update(
+    domainId: string,
+    input: WithClientIdAlias<UpdateDomainInput>
+  ): Promise<Domain> {
+    return this.http.request({
+      method: "PATCH",
+      path: `/v0/domains/${encodePath(domainId)}`,
+      body: mapClientId(input)
     });
   }
 }
@@ -414,6 +540,114 @@ class ApiKeysResource {
       path: `/v0/api-keys/${encodePath(apiKeyId)}`
     });
   }
+
+  /** Rename a key (PATCH returns `{key_id, name}`). */
+  update(
+    apiKeyId: string,
+    input: UpdateApiKeyInput
+  ): Promise<UpdateApiKeyResult> {
+    return this.http.request({
+      method: "PATCH",
+      path: `/v0/api-keys/${encodePath(apiKeyId)}`,
+      body: input
+    });
+  }
+}
+
+class SuppressionsResource {
+  constructor(private readonly http: HttpClient) {}
+
+  list(
+    params: ListSuppressionsParams = {}
+  ): Promise<ListResponse<"suppressions", Suppression>> {
+    return this.http.request({
+      method: "GET",
+      path: "/v0/suppressions",
+      query: { ...params }
+    });
+  }
+
+  /** Manually suppress an address (reason `manual`). */
+  add(input: CreateSuppressionInput): Promise<Suppression> {
+    return this.http.request({
+      method: "POST",
+      path: "/v0/suppressions",
+      body: input
+    });
+  }
+
+  remove(address: string): Promise<void> {
+    return this.http.request({
+      method: "DELETE",
+      path: `/v0/suppressions/${encodePath(address)}`
+    });
+  }
+
+  batch(input: BatchSuppressionInput): Promise<SuppressionBatchResult> {
+    return this.http.request({
+      method: "POST",
+      path: "/v0/suppressions/batch",
+      body: input
+    });
+  }
+}
+
+class TemplatesResource {
+  constructor(private readonly http: HttpClient) {}
+
+  list(params: ListParams = {}): Promise<ListResponse<"templates", Template>> {
+    return this.http.request({
+      method: "GET",
+      path: "/v0/templates",
+      query: { ...params }
+    });
+  }
+
+  create(input: WithClientIdAlias<CreateTemplateInput>): Promise<Template> {
+    return this.http.request({
+      method: "POST",
+      path: "/v0/templates",
+      body: mapClientId(input)
+    });
+  }
+
+  get(templateId: string): Promise<Template> {
+    return this.http.request({
+      method: "GET",
+      path: `/v0/templates/${encodePath(templateId)}`
+    });
+  }
+
+  update(templateId: string, input: UpdateTemplateInput): Promise<Template> {
+    return this.http.request({
+      method: "PATCH",
+      path: `/v0/templates/${encodePath(templateId)}`,
+      body: input
+    });
+  }
+
+  delete(templateId: string): Promise<void> {
+    return this.http.request({
+      method: "DELETE",
+      path: `/v0/templates/${encodePath(templateId)}`
+    });
+  }
+
+  /** Mark the template sendable (status → `published`). */
+  publish(templateId: string): Promise<Template> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/templates/${encodePath(templateId)}/publish`
+    });
+  }
+
+  /** Clone a template into a new draft. */
+  duplicate(templateId: string): Promise<Template> {
+    return this.http.request({
+      method: "POST",
+      path: `/v0/templates/${encodePath(templateId)}/duplicate`
+    });
+  }
 }
 
 class AuthResource {
@@ -449,6 +683,8 @@ export class WzrdMailClient {
   readonly apiKeys: ApiKeysResource;
   readonly auth: AuthResource;
   readonly metrics: MetricsResource;
+  readonly suppressions: SuppressionsResource;
+  readonly templates: TemplatesResource;
 
   constructor(options: WzrdMailClientOptions = {}) {
     const http = new HttpClient(options);
@@ -460,5 +696,7 @@ export class WzrdMailClient {
     this.apiKeys = new ApiKeysResource(http);
     this.auth = new AuthResource(http);
     this.metrics = new MetricsResource(http);
+    this.suppressions = new SuppressionsResource(http);
+    this.templates = new TemplatesResource(http);
   }
 }
