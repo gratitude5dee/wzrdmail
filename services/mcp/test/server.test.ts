@@ -59,7 +59,29 @@ const EXPECTED_TOOLS = [
   "list_webhooks",
   "create_webhook",
   "list_domains",
-  "get_usage"
+  "get_usage",
+  "send_batch",
+  "cancel_message",
+  "reschedule_message",
+  "share_message",
+  "list_attachments",
+  "message_events",
+  "list_suppressions",
+  "add_suppression",
+  "remove_suppression",
+  "batch_suppressions",
+  "update_inbox",
+  "update_domain",
+  "rename_api_key",
+  "rotate_webhook_secret",
+  "list_webhook_events",
+  "list_templates",
+  "create_template",
+  "get_template",
+  "update_template",
+  "delete_template",
+  "publish_template",
+  "duplicate_template"
 ];
 
 describe("wzrdmail MCP server", () => {

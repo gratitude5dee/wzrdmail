@@ -1,5 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CreateInboxInput, SendMessageInput } from "@wzrdmail/core";
+import {
+  CreateInboxInput,
+  CreateSuppressionInput,
+  CreateTemplateInput,
+  ReplyTo,
+  SendMessageInput,
+  ShareMessageInput,
+  UpdateDomainInput,
+  UpdateInboxInput,
+  UpdateTemplateInput
+} from "@wzrdmail/core";
 import { WzrdmailError } from "wzrdmail";
 import { z } from "zod";
 
@@ -54,6 +64,7 @@ const replyShape = {
   text: z.string().optional().describe("Plain-text body."),
   html: z.string().optional().describe("HTML body."),
   labels: z.array(z.string()).optional(),
+  reply_to: ReplyTo.optional().describe("Reply-To address or list of addresses."),
   client_id: z.string().optional()
 };
 
@@ -164,6 +175,7 @@ export function registerTools(server: McpServer, api: ApiClient): void {
       message_id: messageId,
       to: z.array(z.string()).min(1).describe("Recipient email addresses."),
       text: z.string().optional().describe("Note to prepend."),
+      reply_to: ReplyTo.optional().describe("Reply-To address or list of addresses."),
       client_id: z.string().optional()
     },
     wrap(({ inbox_id, message_id, ...body }) =>
@@ -177,12 +189,14 @@ export function registerTools(server: McpServer, api: ApiClient): void {
 
   server.tool(
     "update_message",
-    "Update a message's labels or read state.",
+    "Update a message's labels, read state, or scheduled send_at.",
     {
       inbox_id: inboxId,
       message_id: messageId,
       add_labels: z.array(z.string()).optional(),
-      remove_labels: z.array(z.string()).optional()
+      remove_labels: z.array(z.string()).optional(),
+      read: z.boolean().optional(),
+      send_at: z.string().optional().describe("ISO-8601 time to send (scheduled messages).")
     },
     wrap(({ inbox_id, message_id, ...body }) =>
       api.request({
@@ -335,5 +349,277 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     "Get this month's usage per metric versus plan limits.",
     { month: z.string().optional().describe("Month as YYYY-MM (default: current).") },
     wrap((query) => api.request({ method: "GET", path: "/v0/metrics/usage", query }))
+  );
+
+  server.tool(
+    "send_batch",
+    "Send up to 100 messages in one call. Each item is a send_message body; results come back per index.",
+    {
+      inbox_id: inboxId,
+      messages: z
+        .array(SendMessageInput)
+        .min(1)
+        .max(100)
+        .describe("Send inputs, same shape as send_message minus inbox_id."),
+      idempotency_key: z
+        .string()
+        .optional()
+        .describe("Idempotency-Key header value; retries with the same key return the stored result.")
+    },
+    wrap(({ inbox_id, messages, idempotency_key }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/batch-send`,
+        body: { messages },
+        headers: idempotency_key === undefined ? undefined : { "Idempotency-Key": idempotency_key }
+      })
+    )
+  );
+
+  server.tool(
+    "cancel_message",
+    "Cancel a scheduled message (state must be 'scheduled').",
+    { inbox_id: inboxId, message_id: messageId },
+    wrap(({ inbox_id, message_id }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/${encodePath(message_id)}/cancel`
+      })
+    )
+  );
+
+  server.tool(
+    "reschedule_message",
+    "Change when a scheduled message sends.",
+    {
+      inbox_id: inboxId,
+      message_id: messageId,
+      send_at: z.string().describe("ISO-8601 timestamp for the new send time.")
+    },
+    wrap(({ inbox_id, message_id, send_at }) =>
+      api.request({
+        method: "PATCH",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/${encodePath(message_id)}`,
+        body: { send_at }
+      })
+    )
+  );
+
+  server.tool(
+    "share_message",
+    "Create a share link for a message.",
+    { inbox_id: inboxId, message_id: messageId, ...ShareMessageInput.shape },
+    wrap(({ inbox_id, message_id, ...body }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/${encodePath(message_id)}/share`,
+        body
+      })
+    )
+  );
+
+  server.tool(
+    "list_attachments",
+    "List a message's attachments (metadata only; use get_attachment for a download URL).",
+    { inbox_id: inboxId, message_id: messageId },
+    wrap(({ inbox_id, message_id }) =>
+      api.request({
+        method: "GET",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/${encodePath(message_id)}/attachments`
+      })
+    )
+  );
+
+  server.tool(
+    "message_events",
+    "Get the event timeline for one message (sent/delivered/opened/clicked/…).",
+    { inbox_id: inboxId, message_id: messageId },
+    wrap(({ inbox_id, message_id }) =>
+      api.request({
+        method: "GET",
+        path: `/v0/inboxes/${encodePath(inbox_id)}/messages/${encodePath(message_id)}/events`
+      })
+    )
+  );
+
+  server.tool(
+    "list_suppressions",
+    "List suppressed recipient addresses (bounces, complaints, manual).",
+    {
+      ...pagination,
+      reason: z
+        .enum(["bounce", "complaint", "manual"])
+        .optional()
+        .describe("Filter by suppression reason.")
+    },
+    wrap((query) => api.request({ method: "GET", path: "/v0/suppressions", query }))
+  );
+
+  server.tool(
+    "add_suppression",
+    "Suppress an address manually; future sends to it are rejected.",
+    CreateSuppressionInput.shape,
+    wrap((body) => api.request({ method: "POST", path: "/v0/suppressions", body }))
+  );
+
+  server.tool(
+    "remove_suppression",
+    "Remove an address from the suppression list.",
+    { address: z.string().email().describe("Suppressed address to remove.") },
+    wrap(({ address }) =>
+      api.request({ method: "DELETE", path: `/v0/suppressions/${encodePath(address)}` })
+    )
+  );
+
+  server.tool(
+    "batch_suppressions",
+    "Add and/or remove many suppressions in one call.",
+    {
+      add: z.array(z.string().email()).max(100).optional(),
+      remove: z.array(z.string().email()).max(100).optional()
+    },
+    wrap((body) => api.request({ method: "POST", path: "/v0/suppressions/batch", body }))
+  );
+
+  server.tool(
+    "update_inbox",
+    "Update an inbox's display name or open/click tracking toggles.",
+    { inbox_id: inboxId, ...UpdateInboxInput.shape },
+    wrap(({ inbox_id, ...body }) =>
+      api.request({
+        method: "PATCH",
+        path: `/v0/inboxes/${encodePath(inbox_id)}`,
+        body
+      })
+    )
+  );
+
+  server.tool(
+    "update_domain",
+    "Update a sending domain (e.g. custom_return_path).",
+    {
+      domain_id: z.string().describe("Domain id (dom_…) or domain name."),
+      ...UpdateDomainInput.shape
+    },
+    wrap(({ domain_id, ...body }) =>
+      api.request({
+        method: "PATCH",
+        path: `/v0/domains/${encodePath(domain_id)}`,
+        body
+      })
+    )
+  );
+
+  server.tool(
+    "rename_api_key",
+    "Rename an API key.",
+    {
+      key_id: z.string().describe("API key id (key_…), from keys list/create."),
+      name: z.string().nullable().optional().describe("New display name (null clears it).")
+    },
+    wrap(({ key_id, ...body }) =>
+      api.request({
+        method: "PATCH",
+        path: `/v0/api-keys/${encodePath(key_id)}`,
+        body
+      })
+    )
+  );
+
+  server.tool(
+    "rotate_webhook_secret",
+    "Rotate a webhook's signing secret. Returns the new secret once.",
+    { webhook_id: z.string().describe("Webhook id (whk_…).") },
+    wrap(({ webhook_id }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/webhooks/${encodePath(webhook_id)}/rotate-secret`
+      })
+    )
+  );
+
+  server.tool(
+    "list_webhook_events",
+    "List recent delivery events for one webhook.",
+    { webhook_id: z.string().describe("Webhook id (whk_…)."), ...pagination },
+    wrap(({ webhook_id, ...query }) =>
+      api.request({
+        method: "GET",
+        path: `/v0/webhooks/${encodePath(webhook_id)}/events`,
+        query
+      })
+    )
+  );
+
+  server.tool(
+    "list_templates",
+    "List email templates (draft and published).",
+    { ...pagination },
+    wrap((query) => api.request({ method: "GET", path: "/v0/templates", query }))
+  );
+
+  server.tool(
+    "create_template",
+    "Create a template. Reference it from send_message/create_draft via the template field.",
+    CreateTemplateInput.shape,
+    wrap((body) => api.request({ method: "POST", path: "/v0/templates", body }))
+  );
+
+  server.tool(
+    "get_template",
+    "Get one template by template_id.",
+    { template_id: z.string().describe("Template id (tpl_…).") },
+    wrap(({ template_id }) =>
+      api.request({ method: "GET", path: `/v0/templates/${encodePath(template_id)}` })
+    )
+  );
+
+  server.tool(
+    "update_template",
+    "Update a draft template's fields.",
+    {
+      template_id: z.string().describe("Template id (tpl_…)."),
+      ...UpdateTemplateInput.shape
+    },
+    wrap(({ template_id, ...body }) =>
+      api.request({
+        method: "PATCH",
+        path: `/v0/templates/${encodePath(template_id)}`,
+        body
+      })
+    )
+  );
+
+  server.tool(
+    "delete_template",
+    "Delete a template.",
+    { template_id: z.string().describe("Template id (tpl_…).") },
+    wrap(({ template_id }) =>
+      api.request({ method: "DELETE", path: `/v0/templates/${encodePath(template_id)}` })
+    )
+  );
+
+  server.tool(
+    "publish_template",
+    "Publish a draft template so it can be used for sends.",
+    { template_id: z.string().describe("Template id (tpl_…).") },
+    wrap(({ template_id }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/templates/${encodePath(template_id)}/publish`
+      })
+    )
+  );
+
+  server.tool(
+    "duplicate_template",
+    "Copy a template into a new draft.",
+    { template_id: z.string().describe("Template id (tpl_…).") },
+    wrap(({ template_id }) =>
+      api.request({
+        method: "POST",
+        path: `/v0/templates/${encodePath(template_id)}/duplicate`
+      })
+    )
   );
 }

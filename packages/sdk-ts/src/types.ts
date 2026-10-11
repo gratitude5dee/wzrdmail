@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { IsoTimestamp } from "@wzrdmail/core";
+import type { Message, SendMessageInput, Suppression } from "@wzrdmail/core";
 
 /** Pagination params accepted by every list endpoint (§7). */
 export interface ListParams {
@@ -11,6 +12,94 @@ export interface ListMessagesParams extends ListParams {
   labels?: string[];
   before?: string;
   after?: string;
+}
+
+/** Per-item outcome of POST .../messages/batch-send: `{index, ...Message}` on success. */
+export type BatchSendItemResult =
+  | ({ index: number } & Message)
+  | { index: number; error: { name: string; message: string } };
+
+/** `POST .../messages/batch-send` response. */
+export interface BatchSendResult {
+  results: BatchSendItemResult[];
+}
+
+export interface ListSuppressionsParams extends ListParams {
+  reason?: "bounce" | "complaint" | "manual" | string;
+  /** Exact address filter. */
+  address?: string;
+}
+
+/** `POST /v0/suppressions/batch` response. */
+export interface SuppressionBatchResult {
+  added: Suppression[];
+  removed: string[];
+}
+
+/** `PATCH /v0/api-keys/:key_id` response (rename). */
+export interface UpdateApiKeyResult {
+  key_id: string;
+  name: string | null;
+}
+
+/** `POST /v0/webhooks/:id/rotate-secret` response — plaintext shown once. */
+export interface RotateWebhookSecretResult {
+  webhook_id: string;
+  secret: string;
+}
+
+/** `POST .../messages/:id/share` options (seconds, default 86400, max 7d). */
+export interface ShareMessageOptions {
+  expires_in?: number;
+}
+
+export interface UpdateInboxInput {
+  display_name?: string | null;
+  x_open_tracking?: boolean;
+  x_click_tracking?: boolean;
+}
+
+export interface UpdateDomainInput {
+  custom_return_path?: string | null;
+  client_id?: string;
+}
+
+export interface UpdateApiKeyInput {
+  name?: string | null;
+}
+
+export interface CreateSuppressionInput {
+  address: string;
+}
+
+export interface BatchSuppressionInput {
+  add?: string[];
+  remove?: string[];
+}
+
+export interface CreateTemplateInput {
+  name: string;
+  subject?: string;
+  from?: string;
+  reply_to?: string;
+  html?: string;
+  text?: string;
+  client_id?: string;
+}
+
+export interface UpdateTemplateInput {
+  name?: string;
+  subject?: string | null;
+  from?: string | null;
+  reply_to?: string | null;
+  html?: string | null;
+  text?: string | null;
+}
+
+/** Options accepted by messages.batchSend. */
+export interface BatchSendOptions {
+  /** Batch-level Idempotency-Key header (dedupes the whole batch). */
+  idempotencyKey?: string;
 }
 
 /** Webhook subscription (§4, §7 — no core schema yet, defined here). */
@@ -84,6 +173,8 @@ export interface CreateDraftInput {
   subject?: string;
   text?: string;
   html?: string;
+  reply_to?: string | string[];
+  headers?: Record<string, string>;
   labels?: string[];
   client_id?: string;
 }
@@ -93,6 +184,11 @@ export interface ReplyMessageInput {
   html?: string;
   cc?: string[];
   bcc?: string[];
+  reply_to?: string | string[];
+  headers?: Record<string, string>;
+  attachments?: SendMessageInput["attachments"];
+  labels?: string[];
+  send_at?: string;
   client_id?: string;
 }
 
@@ -102,12 +198,21 @@ export interface ForwardMessageInput {
   bcc?: string[];
   text?: string;
   html?: string;
+  reply_to?: string | string[];
+  headers?: Record<string, string>;
+  attachments?: SendMessageInput["attachments"];
+  labels?: string[];
+  send_at?: string;
   client_id?: string;
 }
 
 export interface UpdateMessageInput {
   labels?: string[];
+  add_labels?: string[];
+  remove_labels?: string[];
   read?: boolean;
+  /** Reschedule a scheduled/cancelled send (ISO-8601, must be future). */
+  send_at?: string;
 }
 
 /** Pod — namespace within an org for multi-tenant isolation (§4, §7). */
