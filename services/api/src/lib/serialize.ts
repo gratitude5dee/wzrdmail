@@ -22,6 +22,10 @@ export interface MessageRow {
   in_reply_to: string | null;
   send_at: string | null;
   deleted_at: string | null;
+  x_open_count: number;
+  x_click_count: number;
+  x_last_opened_at: string | null;
+  x_last_clicked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +112,10 @@ export function messageJson(
     rfc822_message_id: row.rfc822_message_id,
     send_at: row.send_at,
     deleted_at: row.deleted_at,
+    x_open_count: row.x_open_count,
+    x_click_count: row.x_click_count,
+    x_last_opened_at: row.x_last_opened_at,
+    x_last_clicked_at: row.x_last_clicked_at,
     created_at: row.created_at,
     updated_at: row.updated_at
   };

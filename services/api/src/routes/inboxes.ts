@@ -36,6 +36,8 @@ function inboxJson(row: InboxRow): Record<string, unknown> {
     domain: row.domain,
     display_name: row.display_name,
     client_id: row.client_id,
+    x_open_tracking: row.x_open_tracking === 1,
+    x_click_tracking: row.x_click_tracking === 1,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
@@ -47,7 +49,8 @@ inboxes.get("/inboxes", async (c) => {
   const { limit, cursor } = parsePagination(c);
   const rows = (
     await c.env.DB.prepare(
-      `SELECT inbox_id, org_id, pod_id, username, domain, display_name, client_id, created_at, updated_at
+      `SELECT inbox_id, org_id, pod_id, username, domain, display_name, client_id,
+              x_open_tracking, x_click_tracking, created_at, updated_at
        FROM inboxes
        WHERE org_id = ? AND deleted_at IS NULL
          AND (? IS NULL OR pod_id = ?)
@@ -184,6 +187,8 @@ async function createInbox(
       domain,
       display_name: input.display_name ?? null,
       client_id: input.client_id ?? null,
+      x_open_tracking: false,
+      x_click_tracking: false,
       created_at: now,
       updated_at: now
     };
@@ -206,12 +211,32 @@ inboxes.patch("/inboxes/:inbox_id", async (c) => {
   const now = new Date().toISOString();
   const displayName =
     input.display_name === undefined ? inbox.display_name : input.display_name;
+  const openTracking =
+    input.x_open_tracking === undefined
+      ? inbox.x_open_tracking
+      : input.x_open_tracking
+        ? 1
+        : 0;
+  const clickTracking =
+    input.x_click_tracking === undefined
+      ? inbox.x_click_tracking
+      : input.x_click_tracking
+        ? 1
+        : 0;
   await c.env.DB.prepare(
-    "UPDATE inboxes SET display_name = ?, updated_at = ? WHERE inbox_id = ?"
+    "UPDATE inboxes SET display_name = ?, x_open_tracking = ?, x_click_tracking = ?, updated_at = ? WHERE inbox_id = ?"
   )
-    .bind(displayName, now, inbox.inbox_id)
+    .bind(displayName, openTracking, clickTracking, now, inbox.inbox_id)
     .run();
-  return c.json(inboxJson({ ...inbox, display_name: displayName, updated_at: now }));
+  return c.json(
+    inboxJson({
+      ...inbox,
+      display_name: displayName,
+      x_open_tracking: openTracking,
+      x_click_tracking: clickTracking,
+      updated_at: now
+    })
+  );
 });
 
 inboxes.delete("/inboxes/:inbox_id", async (c) => {

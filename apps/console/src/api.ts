@@ -113,6 +113,7 @@ export interface Message {
   x_open_count?: number;
   x_click_count?: number;
   x_last_opened_at?: string | null;
+  x_last_clicked_at?: string | null;
   created_at: string;
 }
 

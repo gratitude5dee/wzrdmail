@@ -62,6 +62,10 @@ export const Message = z.object({
   rfc822_message_id: z.string().nullable().optional(),
   send_at: IsoTimestamp.nullable().optional(),
   deleted_at: IsoTimestamp.nullable().optional(),
+  x_open_count: z.number().int().nonnegative().default(0),
+  x_click_count: z.number().int().nonnegative().default(0),
+  x_last_opened_at: IsoTimestamp.nullable().optional(),
+  x_last_clicked_at: IsoTimestamp.nullable().optional(),
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp
 });
@@ -92,6 +96,8 @@ export const Inbox = z.object({
   domain: z.string(),
   display_name: z.string().nullable().optional(),
   client_id: z.string().nullable().optional(),
+  x_open_tracking: z.boolean().default(false),
+  x_click_tracking: z.boolean().default(false),
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp
 });
@@ -213,7 +219,9 @@ export const ForwardMessageInput = ReplyMessageInput.extend({
 export type ForwardMessageInput = z.infer<typeof ForwardMessageInput>;
 
 export const UpdateInboxInput = z.object({
-  display_name: z.string().max(256).nullable().optional()
+  display_name: z.string().max(256).nullable().optional(),
+  x_open_tracking: z.boolean().optional(),
+  x_click_tracking: z.boolean().optional()
 });
 export type UpdateInboxInput = z.infer<typeof UpdateInboxInput>;
 
@@ -382,6 +390,8 @@ export const EventType = z.enum([
   "message.scheduled",
   "message.cancelled",
   "message.failed",
+  "message.opened",
+  "message.clicked",
   "domain.verified",
   "suppression.added",
   "suppression.removed"

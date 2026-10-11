@@ -36,7 +36,7 @@ import {
 export const messages = new Hono<{ Bindings: Env }>();
 
 const MESSAGE_COLUMNS =
-  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, send_at, deleted_at, created_at, updated_at";
+  "msg_id, org_id, pod_id, inbox_id, thread_id, direction, state, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, text, html, extracted_text, extracted_html, labels, rfc822_message_id, in_reply_to, send_at, deleted_at, x_open_count, x_click_count, x_last_opened_at, x_last_clicked_at, created_at, updated_at";
 
 /** `folder` query param: default hides trash; `trash` shows only trashed rows. */
 function folderCondition(c: Context<{ Bindings: Env }>): string {

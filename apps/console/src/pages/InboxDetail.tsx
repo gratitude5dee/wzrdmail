@@ -8,6 +8,7 @@ import {
   type Attachment,
   type Draft,
   type EventEnvelope,
+  type Inbox,
   type Message,
   type ShareLink,
   type Thread
@@ -40,6 +41,7 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
   const [folder, setFolder] = useState<Folder>("Inbox");
   const [query, setQuery] = useState("");
   const [showApi, setShowApi] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const base = unified ? "" : `/inboxes/${encodeURIComponent(inboxId)}`;
@@ -82,9 +84,14 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
             Use API
           </button>
           {!unified && (
-            <Link className="btn primary" to={`/inboxes/${encodeURIComponent(inboxId)}/compose`}>
-              Compose
-            </Link>
+            <>
+              <button className="btn" onClick={() => setShowSettings(true)}>
+                Settings
+              </button>
+              <Link className="btn primary" to={`/inboxes/${encodeURIComponent(inboxId)}/compose`}>
+                Compose
+              </Link>
+            </>
           )}
         </div>
       </div>
@@ -143,6 +150,9 @@ function ThreadListView({ inboxId, unified }: { inboxId: string; unified: boolea
           </div>
         )}
       </div>
+      {showSettings && (
+        <InboxSettingsModal inboxId={inboxId} onClose={() => setShowSettings(false)} />
+      )}
       {showApi && (
         <UseApiDrawer
           onClose={() => setShowApi(false)}
@@ -228,6 +238,94 @@ function ThreadRow({
         )}
       </td>
     </tr>
+  );
+}
+
+/** Per-inbox settings: open/click tracking flags (resend-parity spec §3 P3). */
+function InboxSettingsModal({ inboxId, onClose }: { inboxId: string; onClose: () => void }) {
+  const [inbox, setInbox] = useState<Inbox | null>(null);
+  const [openTracking, setOpenTracking] = useState(false);
+  const [clickTracking, setClickTracking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api<Inbox>(`/inboxes/${encodeURIComponent(inboxId)}`).then((i) => {
+      setInbox(i);
+      setOpenTracking(i.x_open_tracking === true);
+      setClickTracking(i.x_click_tracking === true);
+    }).catch(() => setError("could not load inbox settings"));
+  }, [inboxId]);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api(`/inboxes/${encodeURIComponent(inboxId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          x_open_tracking: openTracking,
+          x_click_tracking: clickTracking
+        })
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not save settings");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Inbox settings</h2>
+        <div className="dim mono" style={{ marginBottom: 12 }}>{inboxId}</div>
+        {!inbox && !error && <div className="dim">Loading…</div>}
+        {inbox && (
+          <>
+            <div className="field">
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={openTracking}
+                  onChange={(e) => setOpenTracking(e.target.checked)}
+                />
+                Open tracking
+              </label>
+              <div className="dim">
+                Adds a 1px image to outbound HTML mail and records opens.
+              </div>
+            </div>
+            <div className="field">
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={clickTracking}
+                  onChange={(e) => setClickTracking(e.target.checked)}
+                />
+                Click tracking
+              </label>
+              <div className="dim">
+                Rewrites links in outbound HTML mail through tracked redirects.
+              </div>
+            </div>
+          </>
+        )}
+        {error && <p className="error">{error}</p>}
+        {saved && <p className="dim">Saved.</p>}
+        <div className="foot">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn primary" disabled={busy || !inbox} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -623,7 +721,7 @@ function MessageCard({ message }: { message: Message }) {
         </span>
         <span>
           <span className="chip">{message.direction}</span>{" "}
-          {typeof message.x_open_count === "number" && message.x_open_count > 0 && (
+          {message.direction === "outbound" && (message.x_open_count ?? 0) > 0 && (
             <span
               className="chip green"
               title={
@@ -635,8 +733,17 @@ function MessageCard({ message }: { message: Message }) {
               opened ×{message.x_open_count}
             </span>
           )}{" "}
-          {typeof message.x_click_count === "number" && message.x_click_count > 0 && (
-            <span className="chip green">clicked ×{message.x_click_count}</span>
+          {message.direction === "outbound" && (message.x_click_count ?? 0) > 0 && (
+            <span
+              className="chip green"
+              title={
+                message.x_last_clicked_at
+                  ? `last clicked ${new Date(message.x_last_clicked_at).toLocaleString()}`
+                  : undefined
+              }
+            >
+              clicked ×{message.x_click_count}
+            </span>
           )}{" "}
           {new Date(message.created_at).toLocaleString()}
         </span>

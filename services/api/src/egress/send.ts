@@ -12,6 +12,7 @@ import {
 import { createMimeMessage } from "mimetext/browser";
 import type { Env } from "../env.js";
 import { bumpUsage, emitEvent } from "../lib/events.js";
+import { injectTracking } from "../lib/tracking.js";
 
 export interface SendContext {
   inbox_id: string;
@@ -286,6 +287,27 @@ async function doSend(
       ? new Date(input.send_at).toISOString()
       : null;
 
+  // Open/click tracking (spec §3 P3): per-inbox flags rewrite the transmitted
+  // MIME only — the stored html stays the author's original so rendering it
+  // in the console never self-counts an open or click.
+  let trackedHtml = input.html;
+  if (trackedHtml) {
+    const flags = await env.DB.prepare(
+      "SELECT x_open_tracking, x_click_tracking FROM inboxes WHERE inbox_id = ?"
+    )
+      .bind(ctx.inbox_id)
+      .first<{ x_open_tracking: number; x_click_tracking: number }>();
+    if (flags?.x_open_tracking === 1 || flags?.x_click_tracking === 1) {
+      trackedHtml = await injectTracking({
+        html: trackedHtml,
+        msgId,
+        env,
+        open: flags.x_open_tracking === 1,
+        click: flags.x_click_tracking === 1
+      });
+    }
+  }
+
   // Build MIME
   const mime = createMimeMessage();
   mime.setSender(ctx.inbox_id);
@@ -311,7 +333,7 @@ async function doSend(
     mime.setHeader(key, value);
   }
   if (input.text) mime.addMessage({ contentType: "text/plain", data: input.text });
-  if (input.html) mime.addMessage({ contentType: "text/html", data: input.html });
+  if (trackedHtml) mime.addMessage({ contentType: "text/html", data: trackedHtml });
   if (!input.text && !input.html) {
     mime.addMessage({ contentType: "text/plain", data: "" });
   }
