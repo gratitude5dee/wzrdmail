@@ -21,6 +21,7 @@ import {
   parseBody,
   parsePagination,
   requireInbox,
+  withIdempotency,
   type InboxRow
 } from "../lib/http.js";
 import { emitEvent } from "../lib/events.js";
@@ -176,56 +177,39 @@ messages.post("/inboxes/:inbox_id/messages/batch-send", async (c) => {
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const input = await parseBody(c, BatchSendInput);
 
-  // Batch-level idempotency: an Idempotency-Key header dedupes the whole batch.
+  // Batch-level idempotency: an Idempotency-Key header dedupes the whole batch
+  // (same TTL-takeover/release semantics as withIdempotency on single creates).
   // Per-item `client_id` remains the safe-retry story for individual items.
-  const headerKey = c.req.header("idempotency-key");
-  if (headerKey) {
-    const prior = await c.env.DB.prepare(
-      "SELECT response FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message_batch' AND client_id = ?"
-    )
-      .bind(auth.org_id, headerKey)
-      .first<{ response: string }>();
-    if (prior?.response) return c.json(JSON.parse(prior.response));
-    const reserved = await c.env.DB.prepare(
-      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at, owner)
-       VALUES (?, 'message_batch', ?, '', ?, ?) ON CONFLICT DO NOTHING`
-    )
-      .bind(auth.org_id, headerKey, new Date().toISOString(), crypto.randomUUID())
-      .run();
-    if (reserved.meta.changes === 0) {
-      throw new ApiError("conflict", "a batch with this Idempotency-Key is already in flight");
-    }
-  }
-
-  const provider = new CloudflareEmailProvider(c.env);
-  const ctx: SendContext = {
-    inbox_id: inbox.inbox_id,
-    org_id: inbox.org_id,
-    pod_id: inbox.pod_id,
-    org_verified: auth.org_verified,
-    human_email: auth.human_email
-  };
-  const results: Record<string, unknown>[] = [];
-  for (const [index, item] of input.messages.entries()) {
-    try {
-      const sent = await sendMessage(c.env, provider, ctx, item);
-      results.push({ index, ...sent });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        results.push({ index, error: err.toEnvelope() });
-      } else {
-        throw err;
+  const payload = await withIdempotency(
+    c.env.DB,
+    auth.org_id,
+    "message_batch",
+    c.req.header("idempotency-key"),
+    async () => {
+      const provider = new CloudflareEmailProvider(c.env);
+      const ctx: SendContext = {
+        inbox_id: inbox.inbox_id,
+        org_id: inbox.org_id,
+        pod_id: inbox.pod_id,
+        org_verified: auth.org_verified,
+        human_email: auth.human_email
+      };
+      const results: Record<string, unknown>[] = [];
+      for (const [index, item] of input.messages.entries()) {
+        try {
+          const sent = await sendMessage(c.env, provider, ctx, item);
+          results.push({ index, ...sent });
+        } catch (err) {
+          if (err instanceof ApiError) {
+            results.push({ index, error: err.toEnvelope() });
+          } else {
+            throw err;
+          }
+        }
       }
+      return { results };
     }
-  }
-  const payload = { results };
-  if (headerKey) {
-    await c.env.DB.prepare(
-      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message_batch' AND client_id = ?"
-    )
-      .bind(JSON.stringify(payload), auth.org_id, headerKey)
-      .run();
-  }
+  );
   deliverInBackground(c);
   return c.json(payload);
 });
@@ -383,10 +367,17 @@ messages.get("/inboxes/:inbox_id/messages/:msg_id/attachments/:att_id", async (c
 
 messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   const auth = await authenticate(c);
-  requirePermission(auth, "admin");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const row = await requireMessage(c, inbox, c.req.param("msg_id"));
   const input = await parseBody(c, UpdateMessageInput);
+  // Rescheduling is a send-lifecycle op (spec §4: the `send` scope); label and
+  // read edits are mailbox administration and still need `admin`.
+  const touchesLabels =
+    input.labels !== undefined ||
+    input.add_labels !== undefined ||
+    input.remove_labels !== undefined ||
+    input.read !== undefined;
+  requirePermission(auth, touchesLabels ? "admin" : "send");
   const next = applyLabelPatch(JSON.parse(row.labels) as string[], input);
   const now = new Date().toISOString();
 
@@ -438,7 +429,7 @@ messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
 // Trashing still cancels too; `cancelled` is the explicit, restorable state.
 messages.post("/inboxes/:inbox_id/messages/:msg_id/cancel", async (c) => {
   const auth = await authenticate(c);
-  requirePermission(auth, "admin");
+  requirePermission(auth, "send");
   const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
   const row = await requireMessage(c, inbox, c.req.param("msg_id"));
   if (row.deleted_at || row.state !== "scheduled") {

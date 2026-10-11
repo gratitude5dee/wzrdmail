@@ -172,6 +172,31 @@ function jsonRecord(value: string): Record<string, string> {
   }
 }
 
+/**
+ * drafts.reply_to predates the `string | string[]` widening (spec §3): legacy
+ * rows hold a bare address, arrays are stored as a JSON string. Decode either.
+ */
+export function parseReplyTo(value: string | null): string | string[] | null {
+  if (value === null) return null;
+  if (value.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed as string[];
+    } catch {
+      // fall through and return the raw value
+    }
+  }
+  return value;
+}
+
+/** Serialize a draft's reply_to for the TEXT column: bare string or JSON array. */
+export function serializeReplyTo(
+  value: string | string[] | null | undefined
+): string | null {
+  if (value == null) return null;
+  return Array.isArray(value) ? JSON.stringify(value) : value;
+}
+
 export function draftJson(row: DraftRow): Record<string, unknown> {
   return {
     draft_id: row.draft_id,
@@ -185,7 +210,7 @@ export function draftJson(row: DraftRow): Record<string, unknown> {
     subject: row.subject,
     text: row.text,
     html: row.html,
-    reply_to: row.reply_to,
+    reply_to: parseReplyTo(row.reply_to),
     headers: jsonRecord(row.headers),
     labels: jsonArray(row.labels),
     in_reply_to: row.in_reply_to,

@@ -152,6 +152,53 @@ describe("drafts API", () => {
     expect(gone.status).toBe(404);
   });
 
+  it("round-trips reply_to as string | string[] (spec §3)", async () => {
+    const inbox = await seedInbox({ address: `d5-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const key = await seedKey(inbox.org_id);
+    const base = `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/drafts`;
+
+    const created = await app.request(
+      base,
+      authed(key, {
+        method: "POST",
+        body: JSON.stringify({
+          to: ["dest@example.com"],
+          reply_to: ["first@example.com", "second@example.com"]
+        })
+      }),
+      env
+    );
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { draft_id: string; reply_to: string[] | string };
+    expect(createdBody.reply_to).toEqual(["first@example.com", "second@example.com"]);
+
+    const got = await app.request(`${base}/${createdBody.draft_id}`, authed(key), env);
+    expect(((await got.json()) as { reply_to: string[] }).reply_to).toEqual([
+      "first@example.com",
+      "second@example.com"
+    ]);
+
+    // A legacy bare-string value stays a string; PATCH accepts arrays too.
+    const patchedString = await app.request(
+      `${base}/${createdBody.draft_id}`,
+      authed(key, { method: "PATCH", body: JSON.stringify({ reply_to: "one@example.com" }) }),
+      env
+    );
+    expect(((await patchedString.json()) as { reply_to: string }).reply_to).toBe("one@example.com");
+    const patchedArray = await app.request(
+      `${base}/${createdBody.draft_id}`,
+      authed(key, {
+        method: "PATCH",
+        body: JSON.stringify({ reply_to: ["a@example.com", "b@example.com"] })
+      }),
+      env
+    );
+    expect(((await patchedArray.json()) as { reply_to: string[] }).reply_to).toEqual([
+      "a@example.com",
+      "b@example.com"
+    ]);
+  });
+
   it("replays draft creation on the same client_id", async () => {
     const inbox = await seedInbox({ address: `d2-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
     const key = await seedKey(inbox.org_id);

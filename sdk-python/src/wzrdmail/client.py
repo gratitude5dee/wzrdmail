@@ -1055,12 +1055,30 @@ class _Metrics:
         self,
         *,
         period: str | None = None,
+        granularity: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        type: str | list[str] | None = None,
         inbox_id: str | None = None,
+        pod_id: str | None = None,
     ) -> Metrics:
+        """`GET /v0/metrics` — bucketed event counts. `period` sets the default
+        span/granularity; `since`/`until` bound the window explicitly and
+        `type` (a value or list), `inbox_id`, `pod_id` filter the events."""
+        if isinstance(type, list):
+            type = ",".join(type)
         data = self._http.request(
             "GET",
             "/v0/metrics",
-            query={"period": period, "inbox_id": inbox_id},
+            query={
+                "period": period,
+                "granularity": granularity,
+                "since": since,
+                "until": until,
+                "type": type,
+                "inbox_id": inbox_id,
+                "pod_id": pod_id,
+            },
         )
         return Metrics(**data)
 

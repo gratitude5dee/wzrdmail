@@ -104,6 +104,10 @@ class Message(_Model):
     in_reply_to: str | None = None
     send_at: str | None = None
     deleted_at: str | None = None
+    x_open_count: int | None = None
+    x_click_count: int | None = None
+    x_last_opened_at: str | None = None
+    x_last_clicked_at: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -306,7 +310,9 @@ class Metrics(_Model):
     """`GET /v0/metrics` — event-count aggregates bucketed for charts."""
 
     period: str | None = None
+    granularity: str | None = None
     since: str | None = None
+    until: str | None = None
     totals: dict[str, int] = {}
     series: list[MetricsPoint] = []
 

@@ -308,6 +308,46 @@ describe("verification state machine", () => {
     expect(body.failure_reason).toContain("_wzrdmail.acme.com");
   });
 
+  it("emits domain.created, domain.failed (once), and domain.deleted", async () => {
+    const { org_id, key } = await seedOrg();
+    const types = async (): Promise<string[]> => {
+      const rows = await env.DB.prepare(
+        "SELECT type FROM events WHERE org_id = ? ORDER BY created_at, event_id"
+      )
+        .bind(org_id)
+        .all<{ type: string }>();
+      return rows.results.map((r) => r.type);
+    };
+
+    const created = await createDomain(key, "lifecycle.example.com");
+    expect(await types()).toEqual(["domain.created"]);
+
+    mockDns("lifecycle.example.com", { ownership: [] });
+    // Re-verify still fails: exactly one domain.failed with the reason attached.
+    await verify(key, created.domain_id);
+    await verify(key, created.domain_id);
+    expect(await types()).toEqual(["domain.created", "domain.failed"]);
+    const failed = await env.DB.prepare(
+      "SELECT payload FROM events WHERE org_id = ? AND type = 'domain.failed'"
+    )
+      .bind(org_id)
+      .first<{ payload: string }>();
+    const payload = JSON.parse(failed!.payload) as {
+      data: { domain_id: string; name: string; failure_reason?: string };
+    };
+    expect(payload.data.domain_id).toBe(created.domain_id);
+    expect(payload.data.name).toBe("lifecycle.example.com");
+    expect(payload.data.failure_reason).toBeTruthy();
+
+    const del = await app.request(
+      `/v0/domains/${created.domain_id}`,
+      authed(key, { method: "DELETE" }),
+      env
+    );
+    expect(del.status).toBe(204);
+    expect(await types()).toEqual(["domain.created", "domain.failed", "domain.deleted"]);
+  });
+
   it("keeps state on resolver failure and returns 500", async () => {
     const { key } = await seedOrg();
     const created = await createDomain(key);

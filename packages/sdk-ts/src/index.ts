@@ -28,6 +28,10 @@ export type {
   ListParams,
   ListResponse,
   ListSuppressionsParams,
+  Metrics,
+  MetricsParams,
+  MetricsPoint,
+  PlanUsage,
   Pod,
   ReplyMessageInput,
   RotateWebhookSecretResult,
@@ -40,6 +44,7 @@ export type {
   UpdateMessageInput,
   UpdateTemplateInput,
   Usage,
+  UsageCounter,
   UsageMetric,
   Webhook,
   WebhookTestResult

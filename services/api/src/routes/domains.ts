@@ -17,6 +17,49 @@ import { buildEvent } from "../lib/events.js";
 import { deliveryEnqueueStatements, processDueDeliveries } from "../lib/webhook-delivery.js";
 import { collection, parseBody, parsePagination, withIdempotency } from "../lib/http.js";
 
+const DOMAIN_EVENT_INSERT =
+  "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, msg_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+
+/** Process any webhook deliveries an event just enqueued (no-op under tests). */
+function kickDeliveries(c: Context<{ Bindings: Env }>): void {
+  try {
+    c.executionCtx.waitUntil(processDueDeliveries(c.env));
+  } catch {
+    // no ExecutionContext (unit tests): the scheduled sweep delivers instead
+  }
+}
+
+/**
+ * Statements for a domain lifecycle event (spec §4): the event insert plus
+ * one webhook_deliveries row per subscribed endpoint. Domains are org-level,
+ * so the event rides the org's first pod like domain.verified does; an org
+ * with no pods gets no event.
+ */
+async function domainEventStatements(
+  c: Context<{ Bindings: Env }>,
+  orgId: string,
+  type: "domain.created" | "domain.deleted" | "domain.failed",
+  data: Record<string, unknown>
+): Promise<D1PreparedStatement[]> {
+  const pod = await c.env.DB.prepare(
+    "SELECT pod_id FROM pods WHERE org_id = ? ORDER BY created_at LIMIT 1"
+  )
+    .bind(orgId)
+    .first<{ pod_id: string }>();
+  if (!pod) return [];
+  const event = buildEvent({ type, org_id: orgId, pod_id: pod.pod_id, data });
+  const deliveryInserts = await deliveryEnqueueStatements(c.env.DB, {
+    event_id: event.event_id,
+    type,
+    org_id: orgId,
+    pod_id: pod.pod_id
+  });
+  return [
+    c.env.DB.prepare(DOMAIN_EVENT_INSERT).bind(...event.values),
+    ...deliveryInserts
+  ];
+}
+
 export const domains = new Hono<{ Bindings: Env }>();
 
 const SHARED_DOMAIN = "wzrd.tech";
@@ -147,15 +190,23 @@ domains.post("/domains", async (c) => {
     const domainId = newId("dom");
     const token = randomToken();
     const now = new Date().toISOString();
-    const inserted = await c.env.DB.prepare(
-      `INSERT INTO domains (domain_id, org_id, name, verified, status, verification_token, created_at, updated_at)
-       VALUES (?, ?, ?, 0, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`
-    )
-      .bind(domainId, auth.org_id, name, token, now, now)
-      .run();
-    if (inserted.meta.changes === 0) {
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(
+        `INSERT INTO domains (domain_id, org_id, name, verified, status, verification_token, created_at, updated_at)
+         VALUES (?, ?, ?, 0, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`
+      ).bind(domainId, auth.org_id, name, token, now, now)
+    ];
+    statements.push(
+      ...(await domainEventStatements(c, auth.org_id, "domain.created", {
+        domain_id: domainId,
+        name
+      }))
+    );
+    const results = await c.env.DB.batch(statements);
+    if (results[0]!.meta.changes === 0) {
       throw new ApiError("conflict", `domain ${name} is already registered`);
     }
+    if (statements.length > 1) kickDeliveries(c);
     return domainJson({
       domain_id: domainId,
       org_id: auth.org_id,
@@ -262,8 +313,14 @@ domains.post("/domains/:domain_id/verify", async (c) => {
     row.domain_id
   );
 
+  // Transition events (spec §4): domain.verified on success, domain.failed
+  // when the checks settle failed. Each emits exactly once per transition —
+  // the guarded insert only fires for the request that performs the
+  // non-<status> -> <status> transition, atomically with the state change.
+  const lifecycleType =
+    status === "verified" ? "domain.verified" : status === "failed" ? "domain.failed" : null;
   let batched = false;
-  if (status === "verified") {
+  if (lifecycleType) {
     const pod = await c.env.DB.prepare(
       "SELECT pod_id FROM pods WHERE org_id = ? ORDER BY created_at LIMIT 1"
     )
@@ -271,31 +328,28 @@ domains.post("/domains/:domain_id/verify", async (c) => {
       .first<{ pod_id: string }>();
     if (pod) {
       const event = buildEvent({
-        type: "domain.verified",
+        type: lifecycleType,
         org_id: auth.org_id,
         pod_id: pod.pod_id,
-        data: { domain_id: row.domain_id, name: row.name }
+        data: {
+          domain_id: row.domain_id,
+          name: row.name,
+          ...(failureReason ? { failure_reason: failureReason } : {})
+        }
       });
-      // Emit domain.verified exactly once: the guarded insert only fires for
-      // the request that performs the non-verified -> verified transition,
-      // atomically with the state change.
       const guardedInsert = c.env.DB.prepare(
         `INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, msg_id, payload, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?
-         WHERE (SELECT status FROM domains WHERE domain_id = ?) != 'verified'`
-      ).bind(...event.values, row.domain_id);
+         WHERE (SELECT status FROM domains WHERE domain_id = ?) != ?`
+      ).bind(...event.values, row.domain_id, status);
       const deliveryInserts = await deliveryEnqueueStatements(c.env.DB, {
         event_id: event.event_id,
-        type: "domain.verified",
+        type: lifecycleType,
         org_id: auth.org_id,
         pod_id: pod.pod_id
       });
       await c.env.DB.batch([guardedInsert, ...deliveryInserts, update]);
-      try {
-        c.executionCtx.waitUntil(processDueDeliveries(c.env));
-      } catch {
-        // no ExecutionContext (unit tests): the scheduled sweep delivers instead
-      }
+      kickDeliveries(c);
       batched = true;
     }
   }
@@ -368,6 +422,16 @@ domains.delete("/domains/:domain_id", async (c) => {
   if ((inUse?.n ?? 0) > 0) {
     throw new ApiError("conflict", `domain ${row.name} still has active inboxes`);
   }
-  await c.env.DB.prepare("DELETE FROM domains WHERE domain_id = ?").bind(row.domain_id).run();
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare("DELETE FROM domains WHERE domain_id = ?").bind(row.domain_id)
+  ];
+  statements.push(
+    ...(await domainEventStatements(c, auth.org_id, "domain.deleted", {
+      domain_id: row.domain_id,
+      name: row.name
+    }))
+  );
+  await c.env.DB.batch(statements);
+  if (statements.length > 1) kickDeliveries(c);
   return c.body(null, 204);
 });
