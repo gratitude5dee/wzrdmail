@@ -1,4 +1,4 @@
-import { ApiError, newId } from "@wzrdmail/core";
+import { ApiError, newId, UpdateApiKeyInput } from "@wzrdmail/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import { authenticate, hashApiKey, requirePermission } from "../auth.js";
@@ -125,6 +125,30 @@ keys.post("/api-keys", async (c) => {
     },
     201
   );
+});
+
+keys.patch("/api-keys/:key_id", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const input = await parseBody(c, UpdateApiKeyInput);
+  const result = await c.env.DB.prepare(
+    `UPDATE api_keys SET name = ?
+     WHERE key_id = ? AND org_id = ? AND revoked_at IS NULL
+       AND (? IS NULL OR pod_id = ?)
+       AND (? IS NULL OR inbox_id = ?)`
+  )
+    .bind(
+      input.name ?? null,
+      c.req.param("key_id"),
+      auth.org_id,
+      auth.pod_id,
+      auth.pod_id,
+      auth.inbox_id,
+      auth.inbox_id
+    )
+    .run();
+  if (result.meta.changes === 0) throw new ApiError("not_found", "no such API key");
+  return c.json({ key_id: c.req.param("key_id"), name: input.name ?? null });
 });
 
 keys.delete("/api-keys/:key_id", async (c) => {

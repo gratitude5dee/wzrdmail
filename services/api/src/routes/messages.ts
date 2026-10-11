@@ -1,6 +1,7 @@
 import {
   ApiError,
   BatchGetMessagesInput,
+  BatchSendInput,
   BatchUpdateMessagesInput,
   ForwardMessageInput,
   ReplyMessageInput,
@@ -20,6 +21,7 @@ import {
   requireInbox,
   type InboxRow
 } from "../lib/http.js";
+import { emitEvent } from "../lib/events.js";
 import { processDueDeliveries } from "../lib/webhook-delivery.js";
 import {
   applyLabelPatch,
@@ -165,6 +167,66 @@ messages.get("/inboxes/:inbox_id/messages/search", async (c) => {
   });
 });
 
+messages.post("/inboxes/:inbox_id/messages/batch-send", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "send");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const input = await parseBody(c, BatchSendInput);
+
+  // Batch-level idempotency: an Idempotency-Key header dedupes the whole batch.
+  // Per-item `client_id` remains the safe-retry story for individual items.
+  const headerKey = c.req.header("idempotency-key");
+  if (headerKey) {
+    const prior = await c.env.DB.prepare(
+      "SELECT response FROM idempotency_keys WHERE org_id = ? AND resource_type = 'message_batch' AND client_id = ?"
+    )
+      .bind(auth.org_id, headerKey)
+      .first<{ response: string }>();
+    if (prior?.response) return c.json(JSON.parse(prior.response));
+    const reserved = await c.env.DB.prepare(
+      `INSERT INTO idempotency_keys (org_id, resource_type, client_id, response, created_at, owner)
+       VALUES (?, 'message_batch', ?, '', ?, ?) ON CONFLICT DO NOTHING`
+    )
+      .bind(auth.org_id, headerKey, new Date().toISOString(), crypto.randomUUID())
+      .run();
+    if (reserved.meta.changes === 0) {
+      throw new ApiError("conflict", "a batch with this Idempotency-Key is already in flight");
+    }
+  }
+
+  const provider = new CloudflareEmailProvider(c.env);
+  const ctx: SendContext = {
+    inbox_id: inbox.inbox_id,
+    org_id: inbox.org_id,
+    pod_id: inbox.pod_id,
+    org_verified: auth.org_verified,
+    human_email: auth.human_email
+  };
+  const results: Record<string, unknown>[] = [];
+  for (const [index, item] of input.messages.entries()) {
+    try {
+      const sent = await sendMessage(c.env, provider, ctx, item);
+      results.push({ index, ...sent });
+    } catch (err) {
+      if (err instanceof ApiError) {
+        results.push({ index, error: err.toEnvelope() });
+      } else {
+        throw err;
+      }
+    }
+  }
+  const payload = { results };
+  if (headerKey) {
+    await c.env.DB.prepare(
+      "UPDATE idempotency_keys SET response = ? WHERE org_id = ? AND resource_type = 'message_batch' AND client_id = ?"
+    )
+      .bind(JSON.stringify(payload), auth.org_id, headerKey)
+      .run();
+  }
+  deliverInBackground(c);
+  return c.json(payload);
+});
+
 messages.post("/inboxes/:inbox_id/messages/batch-get", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "read");
@@ -275,14 +337,93 @@ messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   const input = await parseBody(c, UpdateMessageInput);
   const next = applyLabelPatch(JSON.parse(row.labels) as string[], input);
   const now = new Date().toISOString();
+
+  let nextState = row.state;
+  let sendAt = row.send_at;
+  if (input.send_at !== undefined) {
+    if (row.deleted_at || (row.state !== "scheduled" && row.state !== "cancelled")) {
+      throw new ApiError("conflict", "only scheduled or cancelled messages can be rescheduled");
+    }
+    const when = new Date(input.send_at);
+    if (when.getTime() <= Date.now()) {
+      throw new ApiError("validation_error", "send_at must be in the future");
+    }
+    sendAt = when.toISOString();
+    nextState = "scheduled";
+  }
+
   await c.env.DB.prepare(
-    "UPDATE messages SET labels = ?, updated_at = ? WHERE msg_id = ?"
+    "UPDATE messages SET labels = ?, state = ?, send_at = ?, updated_at = ? WHERE msg_id = ?"
   )
-    .bind(JSON.stringify(next), now, row.msg_id)
+    .bind(JSON.stringify(next), nextState, sendAt, now, row.msg_id)
     .run();
+
+  if (sendAt !== row.send_at) {
+    await emitEvent(c.env.DB, {
+      type: "message.scheduled",
+      org_id: row.org_id,
+      pod_id: row.pod_id,
+      inbox_id: row.inbox_id,
+      data: {
+        message: { message_id: row.msg_id, inbox_id: row.inbox_id, thread_id: row.thread_id },
+        send_at: sendAt
+      }
+    });
+  }
   return c.json(
-    await messageWithAttachments(c, { ...row, labels: JSON.stringify(next), updated_at: now })
+    await messageWithAttachments(c, {
+      ...row,
+      labels: JSON.stringify(next),
+      state: nextState,
+      send_at: sendAt,
+      updated_at: now
+    })
   );
+});
+
+// Cancels a scheduled send without trashing the message (Resend parity).
+// Trashing still cancels too; `cancelled` is the explicit, restorable state.
+messages.post("/inboxes/:inbox_id/messages/:msg_id/cancel", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const row = await requireMessage(c, inbox, c.req.param("msg_id"));
+  if (row.deleted_at || row.state !== "scheduled") {
+    throw new ApiError("conflict", "only scheduled messages can be cancelled");
+  }
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    "UPDATE messages SET state = 'cancelled', updated_at = ? WHERE msg_id = ?"
+  )
+    .bind(now, row.msg_id)
+    .run();
+  await emitEvent(c.env.DB, {
+    type: "message.cancelled",
+    org_id: row.org_id,
+    pod_id: row.pod_id,
+    inbox_id: row.inbox_id,
+    data: {
+      message: { message_id: row.msg_id, inbox_id: row.inbox_id, thread_id: row.thread_id }
+    }
+  });
+  return c.json(await messageWithAttachments(c, { ...row, state: "cancelled", updated_at: now }));
+});
+
+messages.get("/inboxes/:inbox_id/messages/:msg_id/attachments", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const row = await requireMessage(c, inbox, c.req.param("msg_id"));
+  const atts = await attachmentsFor(c.env.DB, [row.msg_id]);
+  return c.json({
+    attachments: (atts.get(row.msg_id) ?? []).map((a) => ({
+      attachment_id: a.att_id,
+      filename: a.filename,
+      content_type: a.content_type,
+      size: a.size,
+      content_id: a.content_id
+    }))
+  });
 });
 
 // Moves the message to trash (soft delete). Trashing a scheduled message

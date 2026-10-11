@@ -21,6 +21,7 @@ export const MessageState = z.enum([
   "received",
   "queued",
   "scheduled",
+  "cancelled",
   "sent",
   "delivered",
   "bounced",
@@ -96,11 +97,26 @@ export const Inbox = z.object({
 });
 export type Inbox = z.infer<typeof Inbox>;
 
-export const SendAttachmentInput = z.object({
-  filename: z.string().min(1),
-  content_type: z.string().min(1),
-  content: z.string().min(1) // base64
-});
+export const SendAttachmentInput = z
+  .object({
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    content: z.string().min(1).optional(), // base64
+    /** Hosted URL the API fetches server-side instead of inline content. */
+    path: z.string().url().optional(),
+    /** MIME Content-ID for inline images referenced from html as `cid:<id>`. */
+    content_id: z.string().min(1).max(256).optional()
+  })
+  .refine((a) => (a.content === undefined) !== (a.path === undefined), {
+    message: "provide exactly one of content or path"
+    });
+export type SendAttachmentInput = z.infer<typeof SendAttachmentInput>;
+
+/** `Name <a@b>` or bare address; arrays join into one Reply-To header. */
+export const ReplyTo = z.union([
+  z.string().email(),
+  z.array(z.string().email()).min(1).max(50)
+]);
 
 export const SendMessageInput = z.object({
   to: z.array(z.string().email()).min(1),
@@ -109,7 +125,7 @@ export const SendMessageInput = z.object({
   subject: z.string().default(""),
   text: z.string().optional(),
   html: z.string().optional(),
-  reply_to: z.string().email().optional(),
+  reply_to: ReplyTo.optional(),
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
@@ -117,6 +133,16 @@ export const SendMessageInput = z.object({
   send_at: IsoTimestamp.optional()
 });
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
+
+export const BatchSendInput = z.object({
+  messages: z.array(SendMessageInput).min(1).max(100)
+});
+export type BatchSendInput = z.infer<typeof BatchSendInput>;
+
+export const UpdateApiKeyInput = z.object({
+  name: z.string().min(1).max(80).nullable().optional()
+});
+export type UpdateApiKeyInput = z.infer<typeof UpdateApiKeyInput>;
 
 export const CreatePodInput = z.object({
   name: z.string().min(1).max(128).optional(),
@@ -172,7 +198,7 @@ export const ReplyMessageInput = z.object({
   bcc: z.array(z.string().email()).optional(),
   text: z.string().optional(),
   html: z.string().optional(),
-  reply_to: z.string().email().optional(),
+  reply_to: ReplyTo.optional(),
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
@@ -195,7 +221,9 @@ export const UpdateMessageInput = z.object({
   labels: z.array(z.string()).optional(),
   add_labels: z.array(z.string()).optional(),
   remove_labels: z.array(z.string()).optional(),
-  read: z.boolean().optional()
+  read: z.boolean().optional(),
+  /** Reschedule: only valid while state is `scheduled` or `cancelled`. */
+  send_at: IsoTimestamp.optional()
 });
 export type UpdateMessageInput = z.infer<typeof UpdateMessageInput>;
 
@@ -351,6 +379,9 @@ export const EventType = z.enum([
   "message.bounced",
   "message.complained",
   "message.rejected",
+  "message.scheduled",
+  "message.cancelled",
+  "message.failed",
   "domain.verified"
 ]);
 export type EventType = z.infer<typeof EventType>;

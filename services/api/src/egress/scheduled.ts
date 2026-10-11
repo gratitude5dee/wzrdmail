@@ -57,16 +57,49 @@ export async function deliverDueScheduled(
   // failure after claiming. Its provider outcome is unknown — settle it as
   // failed instead of leaving it invisible to every future sweep.
   const leaseCutoff = new Date(now.getTime() - QUEUED_LEASE_MS).toISOString();
-  const abandoned = await env.DB.prepare(
-    `UPDATE messages SET state = 'failed', updated_at = ?
-     WHERE state = 'queued' AND direction = 'outbound' AND send_at IS NOT NULL
-       AND send_at <= ? AND updated_at < ?`
-  )
-    .bind(now.toISOString(), now.toISOString(), leaseCutoff)
-    .run();
-  if (abandoned.meta.changes > 0) {
+  const abandonedIds = (
+    await env.DB.prepare(
+      `SELECT msg_id, org_id, pod_id, inbox_id, thread_id, from_addr, subject, created_at
+       FROM messages
+       WHERE state = 'queued' AND direction = 'outbound' AND send_at IS NOT NULL
+         AND send_at <= ? AND updated_at < ?`
+    )
+      .bind(now.toISOString(), leaseCutoff)
+      .all<Pick<ScheduledRow, "msg_id" | "org_id" | "pod_id" | "inbox_id" | "thread_id" | "from_addr" | "subject" | "created_at">>()
+  ).results;
+  if (abandonedIds.length > 0) {
+    await env.DB.prepare(
+      `UPDATE messages SET state = 'failed', updated_at = ?
+       WHERE msg_id IN (${abandonedIds.map(() => "?").join(",")}) AND state = 'queued'`
+    )
+      .bind(now.toISOString(), ...abandonedIds.map((r) => r.msg_id))
+      .run();
+    for (const row of abandonedIds) {
+      await emitEvent(env.DB, {
+        type: "message.failed",
+        org_id: row.org_id,
+        pod_id: row.pod_id,
+        inbox_id: row.inbox_id,
+        data: {
+          message: {
+            message_id: row.msg_id,
+            inbox_id: row.inbox_id,
+            thread_id: row.thread_id,
+            organization_id: row.org_id,
+            pod_id: row.pod_id,
+            direction: "outbound",
+            state: "failed",
+            from: row.from_addr,
+            subject: row.subject,
+            created_at: row.created_at,
+            updated_at: now.toISOString()
+          },
+          provider_error: "dispatch claim expired before the provider outcome was recorded"
+        }
+      });
+    }
     console.error(
-      JSON.stringify({ msg: "scheduled_claims_abandoned", count: abandoned.meta.changes })
+      JSON.stringify({ msg: "scheduled_claims_abandoned", count: abandonedIds.length })
     );
   }
 
