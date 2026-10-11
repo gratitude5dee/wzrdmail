@@ -6,6 +6,7 @@ import {
   resolveThread,
   PLATFORM_LIMITS,
   type MailProvider,
+  type SendAttachmentInput,
   type SendMessageInput
 } from "@wzrdmail/core";
 import { createMimeMessage } from "mimetext/browser";
@@ -53,6 +54,99 @@ const PROTECTED_HEADERS = new Set([
 
 /** An in-flight reservation older than this is presumed dead and can be retried. */
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
+
+/** Hard cap on a single fetched attachment, independent of the MIME total. */
+const FETCHED_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const ATTACHMENT_FETCH_REDIRECTS = 3;
+
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h === "::1" || h === "[::1]") return true;
+  if (h.endsWith(".localhost") || h.endsWith(".internal") || h.endsWith(".local") || h.endsWith(".lan")) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)) return true;
+  }
+  return false;
+}
+
+function base64Encode(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** Fetch a hosted attachment. https-only, no private hosts, bounded redirects. */
+async function fetchAttachment(url: string): Promise<Uint8Array> {
+  let current = url;
+  for (let hop = 0; hop <= ATTACHMENT_FETCH_REDIRECTS; hop++) {
+    const parsed = URL.parse(current);
+    if (!parsed || parsed.protocol !== "https:") {
+      throw new ApiError("validation_error", `attachment path must be https: ${url}`);
+    }
+    if (parsed.username || parsed.password) {
+      throw new ApiError("validation_error", "attachment path must not carry credentials");
+    }
+    if (isPrivateHost(parsed.hostname)) {
+      throw new ApiError("validation_error", `attachment path resolves to a private host: ${parsed.hostname}`);
+    }
+    const res = await fetch(parsed.toString(), { redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new ApiError("validation_error", `attachment fetch redirect without location: ${res.status}`);
+      current = new URL(location, parsed).toString();
+      continue;
+    }
+    if (!res.ok) {
+      throw new ApiError("validation_error", `attachment fetch failed (${res.status})`);
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.length > FETCHED_ATTACHMENT_MAX_BYTES) {
+      throw new ApiError("message_too_large", `attachment exceeds ${FETCHED_ATTACHMENT_MAX_BYTES} bytes`);
+    }
+    return buf;
+  }
+  throw new ApiError("validation_error", `attachment fetch exceeded ${ATTACHMENT_FETCH_REDIRECTS} redirects`);
+}
+
+interface ResolvedAttachment {
+  attId: string;
+  filename: string;
+  contentType: string;
+  dataBase64: string;
+  bytes: Uint8Array;
+  contentId?: string;
+}
+
+function base64Decode(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function resolveAttachments(
+  attachments: SendAttachmentInput[] | undefined
+): Promise<ResolvedAttachment[]> {
+  const resolved: ResolvedAttachment[] = [];
+  for (const att of attachments ?? []) {
+    const bytes =
+      att.path !== undefined ? await fetchAttachment(att.path) : base64Decode(att.content as string);
+    resolved.push({
+      attId: newId("att"),
+      filename: att.filename,
+      contentType: att.content_type,
+      dataBase64: base64Encode(bytes),
+      bytes,
+      ...(att.content_id ? { contentId: att.content_id } : {})
+    });
+  }
+  return resolved;
+}
 
 /**
  * Outbound pipeline (§6.2). Validations, MIME build, provider send, state
@@ -200,7 +294,16 @@ async function doSend(
   if (bcc.length > 0) mime.setBcc(bcc);
   mime.setSubject(subject);
   mime.setHeader("Message-ID", rfc822MessageId);
-  if (input.reply_to) mime.setHeader("Reply-To", input.reply_to);
+  if (input.reply_to) {
+    const replyTo = Array.isArray(input.reply_to) ? input.reply_to : [input.reply_to];
+    if (replyTo.length === 1) {
+      mime.setHeader("Reply-To", replyTo[0]!);
+    } else {
+      // mimetext validates Reply-To as a single mailbox; a multi-address
+      // Reply-To is RFC-legal, so write it as a raw custom field instead.
+      mime.headers.setCustom({ name: "Reply-To", value: replyTo.join(", ") });
+    }
+  }
   for (const [key, value] of Object.entries(input.headers ?? {})) {
     if (PROTECTED_HEADERS.has(key.toLowerCase())) {
       throw new ApiError("validation_error", `header ${key} cannot be overridden`);
@@ -212,12 +315,19 @@ async function doSend(
   if (!input.text && !input.html) {
     mime.addMessage({ contentType: "text/plain", data: "" });
   }
-  for (const att of input.attachments ?? []) {
+  const resolvedAttachments = await resolveAttachments(input.attachments);
+  for (const att of resolvedAttachments) {
     mime.addAttachment({
       filename: att.filename,
-      contentType: att.content_type,
-      data: att.content,
-      encoding: "base64"
+      contentType: att.contentType,
+      data: att.dataBase64,
+      encoding: "base64",
+      ...(att.contentId
+        ? {
+            inline: true,
+            headers: { "Content-ID": `<${att.contentId}>` }
+          }
+        : {})
     });
   }
   const raw = mime.asRaw();
@@ -341,6 +451,23 @@ async function doSend(
        VALUES (?, ?, ?, ?) ON CONFLICT (inbox_id, rfc822_message_id) DO NOTHING`
     ).bind(ctx.inbox_id, rfc822MessageId, threadId, msgId)
   );
+  for (const att of resolvedAttachments) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO attachments (att_id, msg_id, inbox_id, filename, content_type, size, content_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        att.attId,
+        msgId,
+        ctx.inbox_id,
+        att.filename,
+        att.contentType,
+        att.bytes.length,
+        att.contentId ?? null,
+        now
+      )
+    );
+  }
   // For scheduled sends the idempotency response is committed atomically with
   // the message rows: a replay can never observe a committed message without
   // its stored response (which would let it schedule a second copy).
@@ -361,8 +488,37 @@ async function doSend(
     );
   }
   await env.DB.batch(statements);
+  for (const att of resolvedAttachments) {
+    await env.MAIL.put(`att/${ctx.inbox_id}/${msgId}/${att.attId}`, att.bytes);
+  }
 
   if (scheduled) {
+    await bumpUsage(env.DB, ctx.org_id, "emails_scheduled", 1);
+    await emitEvent(env.DB, {
+      type: "message.scheduled",
+      org_id: ctx.org_id,
+      pod_id: ctx.pod_id,
+      inbox_id: ctx.inbox_id,
+      data: {
+        message: {
+          message_id: msgId,
+          inbox_id: ctx.inbox_id,
+          thread_id: threadId,
+          organization_id: ctx.org_id,
+          pod_id: ctx.pod_id,
+          direction: "outbound",
+          state: "scheduled",
+          from: ctx.inbox_id,
+          to,
+          cc,
+          bcc,
+          subject,
+          send_at: sendAt,
+          created_at: now,
+          updated_at: now
+        }
+      }
+    });
     return scheduled;
   }
 
