@@ -17,6 +17,8 @@ client.inboxes.messages.send(
 threads = client.inboxes.threads.list(inbox.inbox_id)
 ```
 
+Surface: `inboxes` (+ `.messages`, `.threads`, `.drafts`, `.lists`, `.counts`), `webhooks`, `agent`, `domains`, `pods`, `api_keys`, `lists`, `suppressions`, `templates`, `auth`, `metrics`, `usage`. Message send/reply/forward/draft inputs take `reply_to` as `str | list[str]`, `send_at`, attachments as inline `content` or hosted `path` (+ `content_id` for `cid:` images), and `template={"id": ..., "variables": {...}}` on `send`.
+
 Errors raise `WzrdmailError` with `.status`, `.name`, `.message` (the §7 envelope). 429s retry up to 3 times honoring `Retry-After` (delay-seconds or HTTP-date) with exponential fallback.
 
 ## Development
