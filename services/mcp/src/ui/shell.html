@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>wzrdmail</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html[data-theme="dark"] { --bg: #16181d; --fg: #e8eaed; --muted: #9aa0a6; --panel: #1e2128; --border: #30343b; --accent: #7ab3ff; }
+  html[data-theme="light"], html:not([data-theme]) { --bg: #ffffff; --fg: #1f2329; --muted: #6b7280; --panel: #f6f7f9; --border: #e2e5ea; --accent: #1a56db; }
+  body { margin: 0; font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+  #topbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  #topbar .brand { font-weight: 600; }
+  #inbox-select { flex: 1; min-width: 0; padding: 6px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
+  button { cursor: pointer; border: 1px solid var(--border); background: var(--panel); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:hover { filter: brightness(1.05); }
+  #error { margin: 10px 14px; padding: 8px 10px; border: 1px solid #c0392b; border-radius: 6px; color: #e74c3c; }
+  main { display: grid; grid-template-columns: 1fr; gap: 0; }
+  #message-list { list-style: none; margin: 0; padding: 0; }
+  #message-list li.section { padding: 8px 14px 4px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #message-list li.empty { padding: 16px 14px; color: var(--muted); }
+  .row { display: grid; grid-template-columns: 180px 1fr auto; gap: 10px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 10px 14px; }
+  .row .from { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .time { color: var(--muted); font-size: 12px; }
+  #detail { margin: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  #detail h2 { margin: 0 0 6px; font-size: 16px; }
+  #detail .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; white-space: pre-wrap; }
+  #detail-body { white-space: pre-wrap; max-height: 45vh; overflow: auto; }
+  #compose { position: fixed; inset: auto 0 0 0; padding: 14px; background: var(--bg); border-top: 1px solid var(--border); box-shadow: 0 -4px 16px rgb(0 0 0 / .12); display: grid; gap: 8px; }
+  #compose input, #compose textarea { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
+  #compose textarea { min-height: 120px; resize: vertical; }
+  #compose .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  [hidden] { display: none !important; }
+  @media (min-width: 720px) { main { grid-template-columns: 320px 1fr; } #detail { max-height: calc(100vh - 80px); overflow: auto; } }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="brand">wzrdmail</span>
+    <select id="inbox-select" aria-label="Inbox"></select>
+    <button id="refresh-btn" title="Refresh">Refresh</button>
+    <button id="compose-btn" class="primary">Compose</button>
+  </div>
+  <div id="error" hidden></div>
+  <main>
+    <section id="messages"><ul id="message-list"></ul></section>
+    <section id="detail" hidden>
+      <h2 id="detail-subject"></h2>
+      <div class="meta"><span id="detail-from"></span> &rarr; <span id="detail-to"></span><br /><span id="detail-time"></span></div>
+      <div id="detail-body"></div>
+      <p><button id="reply-btn">Reply</button></p>
+    </section>
+  </main>
+  <form id="compose" hidden onsubmit="return false">
+    <input id="compose-to" placeholder="To (comma-separated)" required />
+    <input id="compose-subject" placeholder="Subject" />
+    <textarea id="compose-body" placeholder="Write your message&hellip;"></textarea>
+    <div class="actions">
+      <button id="cancel-compose-btn" type="button">Cancel</button>
+      <button id="draft-btn" type="button">Save draft</button>
+      <button id="send-btn" type="button" class="primary">Send</button>
+    </div>
+  </form>
+  <!--APP_SCRIPT-->
+</body>
+</html>

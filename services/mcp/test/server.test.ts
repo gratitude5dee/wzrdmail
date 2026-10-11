@@ -81,7 +81,11 @@ const EXPECTED_TOOLS = [
   "update_template",
   "delete_template",
   "publish_template",
-  "duplicate_template"
+  "duplicate_template",
+  "open_mailbox",
+  "open_message",
+  "settings.read",
+  "settings.update"
 ];
 
 describe("wzrdmail MCP server", () => {
@@ -112,6 +116,8 @@ describe("wzrdmail MCP server", () => {
   it("exposes quickstart and llms.txt resources", async () => {
     const { resources } = await client.listResources();
     expect(resources.map((resource) => resource.uri).sort()).toEqual([
+      "ui://wzrdmail/mailbox",
+      "ui://wzrdmail/message",
       "wzrdmail://docs/llms.txt",
       "wzrdmail://docs/quickstart"
     ]);

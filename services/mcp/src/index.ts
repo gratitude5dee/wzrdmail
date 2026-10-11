@@ -8,6 +8,11 @@ import {
   sharedMcpMetadata
 } from "./air-muse.js";
 import { extractApiKey, sessionKeyGuard } from "./auth.js";
+import {
+  durableObjectSettingsStore,
+  registerExtensions,
+  WZRDMAIL_SERVER_INFO
+} from "./extensions.js";
 import { registerResources } from "./resources.js";
 import { registerTools } from "./tools.js";
 
@@ -47,7 +52,7 @@ const withCors = (response: Response): Response => {
 const VERIFY_SESSION_KEY_PATH = "/__verify-session-key";
 
 export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
-  server = new McpServer({ name: "wzrdmail", version: "0.0.1" });
+  server = new McpServer(WZRDMAIL_SERVER_INFO);
 
   async init(): Promise<void> {
     const apiKey = this.props?.apiKey;
@@ -56,6 +61,7 @@ export class WzrdmailMcp extends McpAgent<Env, unknown, Props> {
     const api = new ApiClient({ apiKey, baseUrl: this.env.API_BASE_URL });
     registerTools(this.server, api);
     registerResources(this.server);
+    registerExtensions(this.server, api, durableObjectSettingsStore(this.ctx.storage));
   }
 
   override async fetch(request: Request): Promise<Response> {
