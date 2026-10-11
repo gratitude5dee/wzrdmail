@@ -164,6 +164,9 @@ export const UpdateApiKeyInput = z.object({
 export type UpdateApiKeyInput = z.infer<typeof UpdateApiKeyInput>;
 
 /** A template variable declaration (Resend parity). */
+export const TemplateStatus = z.enum(["draft", "published"]);
+export type TemplateStatus = z.infer<typeof TemplateStatus>;
+
 export const TemplateVariable = z.object({
   key: z
     .string()
@@ -194,7 +197,7 @@ export const Template = z.object({
   text: z.string().nullable(),
   html: z.string().nullable(),
   variables: z.array(TemplateVariable).default([]),
-  status: z.enum(["draft", "published"]),
+  status: TemplateStatus,
   /** Immutable snapshot rendered at send time; null until first publish. */
   published: TemplateBody.nullable(),
   published_at: IsoTimestamp.nullable(),
@@ -556,44 +559,3 @@ export const ShareLink = z.object({
   created_at: IsoTimestamp
 });
 export type ShareLink = z.infer<typeof ShareLink>;
-
-export const TemplateStatus = z.enum(["draft", "published"]);
-export type TemplateStatus = z.infer<typeof TemplateStatus>;
-
-export const Template = z.object({
-  template_id: z.string(),
-  organization_id: z.string().nullable().optional(),
-  name: z.string(),
-  subject: z.string().nullable().optional(),
-  from: z.string().nullable().optional(),
-  reply_to: z.string().nullable().optional(),
-  html: z.string().nullable().optional(),
-  text: z.string().nullable().optional(),
-  status: TemplateStatus,
-  client_id: z.string().nullable().optional(),
-  published_at: IsoTimestamp.nullable().optional(),
-  created_at: IsoTimestamp,
-  updated_at: IsoTimestamp
-});
-export type Template = z.infer<typeof Template>;
-
-export const CreateTemplateInput = z.object({
-  name: z.string().min(1).max(128),
-  subject: z.string().optional(),
-  from: z.string().optional(),
-  reply_to: z.string().email().optional(),
-  html: z.string().optional(),
-  text: z.string().optional(),
-  client_id: z.string().max(256).optional()
-});
-export type CreateTemplateInput = z.infer<typeof CreateTemplateInput>;
-
-export const UpdateTemplateInput = z.object({
-  name: z.string().min(1).max(128).optional(),
-  subject: z.string().nullable().optional(),
-  from: z.string().nullable().optional(),
-  reply_to: z.string().email().nullable().optional(),
-  html: z.string().nullable().optional(),
-  text: z.string().nullable().optional()
-});
-export type UpdateTemplateInput = z.infer<typeof UpdateTemplateInput>;
