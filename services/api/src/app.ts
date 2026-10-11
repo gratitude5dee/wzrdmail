@@ -13,6 +13,8 @@ import { keys } from "./routes/keys.js";
 import { lists } from "./routes/lists.js";
 import { messages } from "./routes/messages.js";
 import { pods } from "./routes/pods.js";
+import { share } from "./routes/share.js";
+import { suppressions } from "./routes/suppressions.js";
 import { threads } from "./routes/threads.js";
 import { usage } from "./routes/usage.js";
 import { webhooks } from "./routes/webhooks.js";
@@ -64,6 +66,8 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/v0", lists);
   app.route("/v0", messages);
   app.route("/v0", pods);
+  app.route("/v0", share);
+  app.route("/v0", suppressions);
   app.route("/v0", threads);
   app.route("/v0", usage);
   app.route("/v0", webhooks);

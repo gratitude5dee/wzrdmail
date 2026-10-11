@@ -6,13 +6,15 @@ export interface EmitEventInput {
   org_id: string;
   pod_id: string;
   inbox_id?: string;
+  /** When the event concerns one message; indexed for the per-message timeline. */
+  msg_id?: string;
   data: Record<string, unknown>;
 }
 
 export interface BuiltEvent {
   event_id: string;
   created_at: string;
-  values: [string, string, string, string, string | null, string, string];
+  values: [string, string, string, string, string | null, string | null, string, string];
 }
 
 export function buildEvent(input: EmitEventInput): BuiltEvent {
@@ -25,6 +27,7 @@ export function buildEvent(input: EmitEventInput): BuiltEvent {
     organization_id: input.org_id,
     pod_id: input.pod_id,
     ...(input.inbox_id ? { inbox_id: input.inbox_id } : {}),
+    ...(input.msg_id ? { msg_id: input.msg_id } : {}),
     data: input.data
   };
   return {
@@ -36,6 +39,7 @@ export function buildEvent(input: EmitEventInput): BuiltEvent {
       input.org_id,
       input.pod_id,
       input.inbox_id ?? null,
+      input.msg_id ?? null,
       JSON.stringify(envelope),
       createdAt
     ]
@@ -53,7 +57,7 @@ export async function emitEvent(db: D1Database, input: EmitEventInput): Promise<
   const built = buildEvent(input);
   const eventInsert = db
     .prepare(
-      "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, msg_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(...built.values);
   const deliveryInserts = await deliveryEnqueueStatements(db, {

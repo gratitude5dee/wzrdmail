@@ -499,6 +499,7 @@ async function doSend(
       org_id: ctx.org_id,
       pod_id: ctx.pod_id,
       inbox_id: ctx.inbox_id,
+      msg_id: msgId,
       data: {
         message: {
           message_id: msgId,
@@ -577,6 +578,7 @@ async function doSend(
     org_id: ctx.org_id,
     pod_id: ctx.pod_id,
     inbox_id: ctx.inbox_id,
+    msg_id: msgId,
     data: {
       message: {
         message_id: msgId,

@@ -382,7 +382,9 @@ export const EventType = z.enum([
   "message.scheduled",
   "message.cancelled",
   "message.failed",
-  "domain.verified"
+  "domain.verified",
+  "suppression.added",
+  "suppression.removed"
 ]);
 export type EventType = z.infer<typeof EventType>;
 
@@ -393,6 +395,70 @@ export const EventEnvelope = z.object({
   organization_id: z.string(),
   pod_id: z.string(),
   inbox_id: InboxId.optional(),
+  /** Set on events that concern one message (indexed on events.msg_id). */
+  msg_id: z.string().optional(),
   data: z.record(z.unknown())
 });
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
+
+/** Per-message event timeline entry — same shape as the stored envelope. */
+export const MessageEvent = EventEnvelope;
+export type MessageEvent = z.infer<typeof MessageEvent>;
+
+export const SuppressionReason = z.enum(["bounce", "complaint", "manual"]);
+export type SuppressionReason = z.infer<typeof SuppressionReason>;
+
+export const Suppression = z.object({
+  address: z.string().email(),
+  reason: SuppressionReason,
+  source_msg_id: z.string().nullable().optional(),
+  created_at: IsoTimestamp
+});
+export type Suppression = z.infer<typeof Suppression>;
+
+export const CreateSuppressionInput = z.object({
+  address: z.string().email().transform((v) => v.toLowerCase()),
+  client_id: z.string().max(256).optional()
+});
+export type CreateSuppressionInput = z.infer<typeof CreateSuppressionInput>;
+
+export const BatchSuppressionInput = z
+  .object({
+    add: z.array(z.string().email().transform((v) => v.toLowerCase())).max(100).optional(),
+    remove: z.array(z.string().email().transform((v) => v.toLowerCase())).max(100).optional()
+  })
+  .refine((v) => (v.add?.length ?? 0) + (v.remove?.length ?? 0) > 0, {
+    message: "at least one of add or remove is required"
+  });
+export type BatchSuppressionInput = z.infer<typeof BatchSuppressionInput>;
+
+export const UpdateDomainInput = z.object({
+  /** Custom bounce (Return-Path) domain for this sending domain; null clears. */
+  custom_return_path: z
+    .string()
+    .min(1)
+    .max(253)
+    .transform(normalizeDomainName)
+    .refine((v) => DOMAIN_NAME_RE.test(v), { message: "must be a valid domain name" })
+    .nullable()
+    .optional(),
+  client_id: z.string().max(256).optional()
+});
+export type UpdateDomainInput = z.infer<typeof UpdateDomainInput>;
+
+export const SHARE_TTL_MAX_SECONDS = 7 * 24 * 60 * 60;
+
+export const ShareMessageInput = z.object({
+  /** Seconds until the public link stops serving (default 86400, max 7 days). */
+  expires_in: z.coerce.number().int().min(1).max(SHARE_TTL_MAX_SECONDS).default(86400)
+});
+export type ShareMessageInput = z.infer<typeof ShareMessageInput>;
+
+export const ShareLink = z.object({
+  share_id: z.string(),
+  share_url: z.string().url(),
+  message_id: z.string(),
+  expires_at: IsoTimestamp,
+  created_at: IsoTimestamp
+});
+export type ShareLink = z.infer<typeof ShareLink>;
