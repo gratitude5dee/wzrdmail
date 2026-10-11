@@ -40,6 +40,7 @@ export function WebhooksPage() {
   const [events, setEvents] = useState<string[]>([]);
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [logHook, setLogHook] = useState<Webhook | null>(null);
 
@@ -82,11 +83,16 @@ export function WebhooksPage() {
   const rotateSecret = async (hook: Webhook) => {
     if (!window.confirm(`Rotate the signing secret for ${hook.url}? The old secret stops working immediately.`))
       return;
-    const res = await api<{ secret: string }>(`/webhooks/${hook.webhook_id}/rotate-secret`, {
-      method: "POST",
-      body: "{}"
-    });
-    setSecret(res.secret);
+    setPageError(null);
+    try {
+      const res = await api<{ secret: string }>(`/webhooks/${hook.webhook_id}/rotate-secret`, {
+        method: "POST",
+        body: "{}"
+      });
+      setSecret(res.secret);
+    } catch (err) {
+      setPageError(err instanceof ApiRequestError ? err.message : "could not rotate secret");
+    }
   };
 
   const remove = async (hook: Webhook) => {
@@ -116,6 +122,12 @@ export function WebhooksPage() {
           </button>
         ))}
       </div>
+
+      {pageError && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <span className="chip red">error</span> {pageError}
+        </div>
+      )}
 
       {tab === "Endpoints" &&
         (hooks.length === 0 ? (

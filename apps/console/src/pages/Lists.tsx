@@ -222,7 +222,19 @@ function SuppressionsList() {
   const [batchAction, setBatchAction] = useState<"add" | "remove">("add");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const openAdd = () => {
+    setModalError(null);
+    setAddress("");
+    setAdding(true);
+  };
+
+  const openBatch = () => {
+    setModalError(null);
+    setBatching(true);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -245,7 +257,7 @@ function SuppressionsList() {
 
   const add = async () => {
     setBusy(true);
-    setError(null);
+    setModalError(null);
     try {
       await api("/suppressions", {
         method: "POST",
@@ -255,7 +267,7 @@ function SuppressionsList() {
       setAddress("");
       await load();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not add suppression");
+      setModalError(err instanceof ApiRequestError ? err.message : "could not add suppression");
     } finally {
       setBusy(false);
     }
@@ -279,7 +291,7 @@ function SuppressionsList() {
       .filter(Boolean);
     if (addresses.length === 0) return;
     setBusy(true);
-    setError(null);
+    setModalError(null);
     try {
       await api("/suppressions/batch", {
         method: "POST",
@@ -289,7 +301,7 @@ function SuppressionsList() {
       setBatchText("");
       await load();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "batch update failed");
+      setModalError(err instanceof ApiRequestError ? err.message : "batch update failed");
     } finally {
       setBusy(false);
     }
@@ -303,10 +315,10 @@ function SuppressionsList() {
   return (
     <div>
       <div className="actions" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => setBatching(true)}>
+        <button className="btn" onClick={openBatch}>
           Batch add/remove
         </button>{" "}
-        <button className="btn primary" onClick={() => setAdding(true)}>
+        <button className="btn primary" onClick={openAdd}>
           + Add Suppression
         </button>
       </div>
@@ -385,7 +397,7 @@ function SuppressionsList() {
               />
               <div className="dim">Added with origin &quot;manual&quot;.</div>
             </div>
-            {error && <p className="error">{error}</p>}
+            {modalError && <p className="error">{modalError}</p>}
             <div className="foot">
               <button className="btn" onClick={() => setAdding(false)}>
                 Cancel

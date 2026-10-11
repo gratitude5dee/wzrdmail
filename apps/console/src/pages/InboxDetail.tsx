@@ -356,10 +356,20 @@ function ScheduledFolder({ inboxId }: { inboxId: string }) {
     setBusy(messageId);
     setError(null);
     try {
-      await api(`${base}/${messageId}`, {
+      const requested = new Date(value).toISOString();
+      const updated = await api<Message>(`${base}/${messageId}`, {
         method: "PATCH",
-        body: JSON.stringify({ send_at: new Date(value).toISOString() })
+        body: JSON.stringify({ send_at: requested })
       });
+      // Older servers ignore send_at on this route and return the row
+      // unchanged — surface that instead of reporting a silent no-op.
+      const accepted =
+        updated.send_at !== null &&
+        new Date(updated.send_at).getTime() === new Date(requested).getTime();
+      if (!accepted) {
+        setError("the API did not accept the new send time");
+        return;
+      }
       setNewTimes((prev) => ({ ...prev, [messageId]: "" }));
       await load();
     } catch (err) {

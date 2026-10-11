@@ -38,7 +38,12 @@ export function TemplatesPage() {
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setTemplates(await apiAll<Template>("/templates?limit=100", "templates"));
+    try {
+      setTemplates(await apiAll<Template>("/templates?limit=100", "templates"));
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not load templates");
+      setTemplates([]);
+    }
   }, []);
 
   useEffect(() => {
