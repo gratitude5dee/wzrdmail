@@ -4,8 +4,10 @@ import {
   BatchSendInput,
   BatchUpdateMessagesInput,
   ForwardMessageInput,
+  newId,
   ReplyMessageInput,
   SendMessageInput,
+  ShareMessageInput,
   UpdateMessageInput
 } from "@wzrdmail/core";
 import { Hono } from "hono";
@@ -22,6 +24,7 @@ import {
   type InboxRow
 } from "../lib/http.js";
 import { emitEvent } from "../lib/events.js";
+import { shareDocumentHtml } from "../lib/share.js";
 import { processDueDeliveries } from "../lib/webhook-delivery.js";
 import {
   applyLabelPatch,
@@ -276,6 +279,55 @@ messages.get("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
   return c.json(await messageWithAttachments(c, row));
 });
 
+// Per-message event timeline (spec §4): every event emitted with this
+// msg_id, chronological. Read-only view over the events table.
+messages.get("/inboxes/:inbox_id/messages/:msg_id/events", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const row = await requireMessage(c, inbox, c.req.param("msg_id"));
+  const events = (
+    await c.env.DB.prepare(
+      "SELECT payload FROM events WHERE msg_id = ? AND org_id = ? ORDER BY created_at, event_id"
+    )
+      .bind(row.msg_id, inbox.org_id)
+      .all<{ payload: string }>()
+  ).results;
+  return c.json({ events: events.map((e) => JSON.parse(e.payload)) });
+});
+
+// Mint a share link (spec §4): snapshots the message's sanitized html/text
+// under an unguessable id; GET /share/:share_id serves it without auth.
+messages.post("/inboxes/:inbox_id/messages/:msg_id/share", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "send");
+  const inbox = await requireInbox(c, auth, c.req.param("inbox_id"));
+  const row = await requireMessage(c, inbox, c.req.param("msg_id"));
+  const input = await parseBody(c, ShareMessageInput);
+  const shareId = newId("share");
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + input.expires_in * 1000).toISOString();
+  const htmlSource = row.html ?? row.extracted_html;
+  const htmlSnapshot = htmlSource ? shareDocumentHtml(htmlSource) : null;
+  const textSnapshot = row.extracted_text ?? row.text;
+  await c.env.DB.prepare(
+    `INSERT INTO share_links (share_id, msg_id, org_id, html_snapshot, text_snapshot, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(shareId, row.msg_id, inbox.org_id, htmlSnapshot, textSnapshot, expiresAt, now)
+    .run();
+  return c.json(
+    {
+      share_id: shareId,
+      share_url: `${new URL(c.req.url).origin}/v0/share/${shareId}`,
+      message_id: row.msg_id,
+      expires_at: expiresAt,
+      created_at: now
+    },
+    201
+  );
+});
+
 messages.get("/inboxes/:inbox_id/messages/:msg_id/raw", async (c) => {
   const auth = await authenticate(c);
   requirePermission(auth, "read");
@@ -364,6 +416,7 @@ messages.patch("/inboxes/:inbox_id/messages/:msg_id", async (c) => {
       org_id: row.org_id,
       pod_id: row.pod_id,
       inbox_id: row.inbox_id,
+      msg_id: row.msg_id,
       data: {
         message: { message_id: row.msg_id, inbox_id: row.inbox_id, thread_id: row.thread_id },
         send_at: sendAt
@@ -402,6 +455,7 @@ messages.post("/inboxes/:inbox_id/messages/:msg_id/cancel", async (c) => {
     org_id: row.org_id,
     pod_id: row.pod_id,
     inbox_id: row.inbox_id,
+    msg_id: row.msg_id,
     data: {
       message: { message_id: row.msg_id, inbox_id: row.inbox_id, thread_id: row.thread_id }
     }

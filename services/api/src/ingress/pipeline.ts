@@ -105,7 +105,9 @@ async function handleDsn(
       )
     );
   }
+  const suppressionInsertIndex = new Map<number, string>();
   for (const recipient of report.recipients) {
+    suppressionInsertIndex.set(statements.length, recipient);
     statements.push(
       env.DB.prepare(
         `INSERT INTO suppressions (org_id, address, reason, source_msg_id, created_at)
@@ -114,13 +116,34 @@ async function handleDsn(
       ).bind(inbox.org_id, recipient, reason, original?.msg_id ?? null, now)
     );
   }
-  if (statements.length > 0) await env.DB.batch(statements);
+  const insertedSuppressions: string[] = [];
+  if (statements.length > 0) {
+    const results = await env.DB.batch(statements);
+    for (const [idx, recipient] of suppressionInsertIndex) {
+      if ((results[idx]?.meta.changes ?? 0) > 0) insertedSuppressions.push(recipient);
+    }
+  }
 
+  for (const address of insertedSuppressions) {
+    await emitEvent(env.DB, {
+      type: "suppression.added",
+      org_id: inbox.org_id,
+      pod_id: inbox.pod_id,
+      inbox_id: inbox.inbox_id,
+      ...(original?.msg_id ? { msg_id: original.msg_id } : {}),
+      data: {
+        address,
+        reason,
+        source_msg_id: original?.msg_id ?? null
+      }
+    });
+  }
   await emitEvent(env.DB, {
     type: eventType,
     org_id: inbox.org_id,
     pod_id: inbox.pod_id,
     inbox_id: inbox.inbox_id,
+    ...(original?.msg_id ? { msg_id: original.msg_id } : {}),
     data: {
       original_message_id: original?.msg_id ?? null,
       recipients: report.recipients,
@@ -420,6 +443,7 @@ export async function ingestEmail(env: Env, input: IngestInput): Promise<IngestR
     org_id: inbox.org_id,
     pod_id: inbox.pod_id,
     inbox_id: inbox.inbox_id,
+    msg_id: msgId,
     data: {
       message: {
         message_id: msgId,

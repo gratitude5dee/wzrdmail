@@ -405,6 +405,66 @@ webhooks.post("/webhooks/:webhook_id/deliveries/:delivery_id/redeliver", async (
   return c.json(deliveryJson(finished), 201);
 });
 
+// Mint a fresh signing secret. The old one dies immediately — callers update
+// their verifier with the returned value, which is only in this response.
+webhooks.post("/webhooks/:webhook_id/rotate-secret", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const secret = randomSecret();
+  const now = new Date().toISOString();
+  await c.env.DB.prepare("UPDATE webhooks SET secret = ?, updated_at = ? WHERE webhook_id = ?")
+    .bind(secret, now, webhook.webhook_id)
+    .run();
+  return c.json({ webhook_id: webhook.webhook_id, secret });
+});
+
+// Events this webhook was dispatched, newest first — the payload view over
+// webhook_deliveries (per-attempt delivery details stay under /deliveries).
+webhooks.get("/webhooks/:webhook_id/events", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const { limit, cursor } = parsePagination(c);
+  const conditions = [
+    "EXISTS (SELECT 1 FROM webhook_deliveries d WHERE d.webhook_id = ? AND d.event_id = e.event_id)"
+  ];
+  const binds: string[] = [webhook.webhook_id];
+  if (cursor) {
+    conditions.push("(e.created_at < ? OR (e.created_at = ? AND e.event_id < ?))");
+    binds.push(cursor.v, cursor.v, cursor.id);
+  }
+  const rows = (
+    await c.env.DB.prepare(
+      `SELECT e.event_id, e.created_at, e.payload FROM events e
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY e.created_at DESC, e.event_id DESC LIMIT ?`
+    )
+      .bind(...binds, limit + 1)
+      .all<{ event_id: string; created_at: string; payload: string }>()
+  ).results;
+  const page = collection(rows, limit, (r) => ({ v: r.created_at, id: r.event_id }));
+  return c.json({
+    events: page.items.map((r) => JSON.parse(r.payload)),
+    next_page_token: page.next_page_token ?? null
+  });
+});
+
+webhooks.get("/webhooks/:webhook_id/events/:event_id", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "read");
+  const webhook = await requireWebhook(c, auth, c.req.param("webhook_id"));
+  const row = await c.env.DB.prepare(
+    `SELECT e.payload FROM events e
+     WHERE e.event_id = ? AND EXISTS (
+       SELECT 1 FROM webhook_deliveries d WHERE d.webhook_id = ? AND d.event_id = e.event_id)`
+  )
+    .bind(c.req.param("event_id"), webhook.webhook_id)
+    .first<{ payload: string }>();
+  if (!row) throw new ApiError("not_found", "no such event for this webhook");
+  return c.json(JSON.parse(row.payload));
+});
+
 // Inbox-scoped mirrors
 webhooks.get("/inboxes/:inbox_id/webhooks", async (c) => {
   const auth = await authenticate(c);

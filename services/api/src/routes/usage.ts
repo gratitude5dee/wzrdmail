@@ -110,23 +110,65 @@ usage.get("/metrics/usage", async (c) => {
   });
 });
 
-/** Event-count aggregates bucketed by day (hour for 24h) for charts. */
+function parseIsoParam(value: string, param: string): string {
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) {
+    throw new ApiError("validation_error", `${param} must be an ISO timestamp`);
+  }
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Event-count aggregates bucketed by day/hour for charts (spec §4 metrics):
+ * since/until bound the window (period still sets the default span and
+ * granularity), type/inbox_id/pod_id filter the counted events.
+ */
 usage.get("/metrics", async (c) => {
   const auth = await authenticate(c);
   requireOrgScope(auth);
   const period = (c.req.query("period") ?? "7d") as Period;
   const days = PERIODS[period];
   if (!days) throw new ApiError("validation_error", "period must be one of 24h, 7d, 30d");
+  const granularity = c.req.query("granularity") ?? (period === "24h" ? "hour" : "day");
+  if (granularity !== "hour" && granularity !== "day") {
+    throw new ApiError("validation_error", "granularity must be hour or day");
+  }
+  const sinceParam = c.req.query("since");
+  const untilParam = c.req.query("until");
+  const since = sinceParam
+    ? parseIsoParam(sinceParam, "since")
+    : new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const until = untilParam
+    ? parseIsoParam(untilParam, "until")
+    : new Date().toISOString();
   const inboxId = c.req.query("inbox_id") ?? null;
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const bucket = period === "24h" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
+  const podId = c.req.query("pod_id") ?? null;
+  const types = (c.req.query("type") ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
+  const bucket = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
+  const conditions = ["org_id = ?", "created_at >= ?", "created_at <= ?"];
+  const binds: string[] = [auth.org_id, since, until];
+  if (inboxId) {
+    conditions.push("inbox_id = ?");
+    binds.push(inboxId);
+  }
+  if (podId) {
+    conditions.push("pod_id = ?");
+    binds.push(podId);
+  }
+  if (types.length > 0) {
+    conditions.push(`type IN (${types.map(() => "?").join(",")})`);
+    binds.push(...types);
+  }
   const rows = await c.env.DB.prepare(
     `SELECT strftime('${bucket}', created_at) AS bucket, type, COUNT(*) AS n
      FROM events
-     WHERE org_id = ? AND created_at >= ? ${inboxId ? "AND inbox_id = ?" : ""}
+     WHERE ${conditions.join(" AND ")}
      GROUP BY bucket, type ORDER BY bucket`
   )
-    .bind(...(inboxId ? [auth.org_id, since, inboxId] : [auth.org_id, since]))
+    .bind(...binds)
     .all<{ bucket: string; type: string; n: number }>();
   const totals: Record<string, number> = {};
   for (const row of rows.results) {
@@ -134,7 +176,9 @@ usage.get("/metrics", async (c) => {
   }
   return c.json({
     period,
+    granularity,
     since,
+    until,
     totals,
     series: rows.results.map((r) => ({ bucket: r.bucket, type: r.type, count: r.n }))
   });

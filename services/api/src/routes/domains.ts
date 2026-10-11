@@ -2,6 +2,7 @@ import {
   ApiError,
   CreateDomainInput,
   PLANS,
+  UpdateDomainInput,
   newId,
   type DnsRecord,
   type DomainStatus,
@@ -23,7 +24,7 @@ const MX_TARGET = "route.wzrd.tech";
 const SPF_INCLUDE = "_spf.wzrd.tech";
 
 const DOMAIN_COLUMNS =
-  "domain_id, org_id, name, status, verification_token, verified_at, last_checked_at, failure_reason, created_at, updated_at";
+  "domain_id, org_id, name, status, verification_token, verified_at, last_checked_at, failure_reason, custom_return_path, created_at, updated_at";
 
 export interface DomainRow {
   domain_id: string;
@@ -34,6 +35,7 @@ export interface DomainRow {
   verified_at: string | null;
   last_checked_at: string | null;
   failure_reason: string | null;
+  custom_return_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +60,7 @@ function domainJson(row: DomainRow): Record<string, unknown> {
     failure_reason: row.failure_reason,
     verified_at: row.verified_at,
     last_checked_at: row.last_checked_at,
+    custom_return_path: row.custom_return_path,
     dns_records: requiredDnsRecords(row.name, row.verification_token),
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -162,6 +165,7 @@ domains.post("/domains", async (c) => {
       verified_at: null,
       last_checked_at: null,
       failure_reason: null,
+      custom_return_path: null,
       created_at: now,
       updated_at: now
     });
@@ -276,8 +280,8 @@ domains.post("/domains/:domain_id/verify", async (c) => {
       // the request that performs the non-verified -> verified transition,
       // atomically with the state change.
       const guardedInsert = c.env.DB.prepare(
-        `INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, payload, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?
+        `INSERT INTO events (event_id, type, org_id, pod_id, inbox_id, msg_id, payload, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?
          WHERE (SELECT status FROM domains WHERE domain_id = ?) != 'verified'`
       ).bind(...event.values, row.domain_id);
       const deliveryInserts = await deliveryEnqueueStatements(c.env.DB, {
@@ -316,6 +320,39 @@ domains.post("/domains/:domain_id/verify", async (c) => {
       found: check.found
     }))
   });
+});
+
+// Update mutable domain settings (spec §4: custom_return_path for SPF-aligned
+// bounce addresses). Pass null to clear.
+domains.patch("/domains/:domain_id", async (c) => {
+  const auth = await authenticate(c);
+  requirePermission(auth, "admin");
+  requireOrgScope(auth);
+  const row = await requireDomain(c, auth, c.req.param("domain_id"));
+  const input = await parseBody(c, UpdateDomainInput);
+  const result = await withIdempotency(
+    c.env.DB,
+    auth.org_id,
+    "domain_update",
+    input.client_id,
+    async () => {
+      const next: DomainRow = {
+        ...row,
+        custom_return_path:
+          input.custom_return_path === undefined
+            ? row.custom_return_path
+            : input.custom_return_path,
+        updated_at: new Date().toISOString()
+      };
+      await c.env.DB.prepare(
+        "UPDATE domains SET custom_return_path = ?, updated_at = ? WHERE domain_id = ?"
+      )
+        .bind(next.custom_return_path, next.updated_at, row.domain_id)
+        .run();
+      return domainJson(next);
+    }
+  );
+  return c.json(result);
 });
 
 domains.delete("/domains/:domain_id", async (c) => {

@@ -80,6 +80,7 @@ export async function deliverDueScheduled(
         org_id: row.org_id,
         pod_id: row.pod_id,
         inbox_id: row.inbox_id,
+        msg_id: row.msg_id,
         data: {
           message: {
             message_id: row.msg_id,
@@ -208,6 +209,7 @@ async function dispatchOne(env: Env, provider: MailProvider, row: ScheduledRow):
     org_id: row.org_id,
     pod_id: row.pod_id,
     inbox_id: row.inbox_id,
+    msg_id: row.msg_id,
     data: {
       message: {
         message_id: row.msg_id,
