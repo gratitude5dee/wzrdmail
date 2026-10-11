@@ -14,6 +14,11 @@ import { WzrdmailError } from "wzrdmail";
 import { z } from "zod";
 
 import { ApiClient, encodePath } from "./api.js";
+import {
+  MAILBOX_RESOURCE_URI,
+  MESSAGE_RESOURCE_URI,
+  uiToolMeta
+} from "./extensions.js";
 
 const pagination = {
   limit: z.number().int().min(1).max(100).optional().describe("Page size (default 20, max 100)."),
@@ -74,10 +79,14 @@ const replyShape = {
  * needed for the next call are always present.
  */
 export function registerTools(server: McpServer, api: ApiClient): void {
-  server.tool(
+  server.registerTool(
     "list_inboxes",
-    "List the inboxes your API key can see. Returns inbox_id values used by every other tool.",
-    { ...pagination },
+    {
+      description:
+        "List the inboxes your API key can see. Returns inbox_id values used by every other tool.",
+      inputSchema: { ...pagination },
+      _meta: uiToolMeta(MAILBOX_RESOURCE_URI)
+    },
     wrap((args) => api.request({ method: "GET", path: "/v0/inboxes", query: args }))
   );
 
@@ -97,15 +106,19 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "list_messages",
-    "List messages in an inbox, newest first. Filter by labels (comma-separated) or time bounds.",
     {
-      inbox_id: inboxId,
-      ...pagination,
-      labels: z.array(z.string()).optional().describe("Only messages with all of these labels."),
-      before: z.string().optional().describe("ISO-8601 upper bound on created_at."),
-      after: z.string().optional().describe("ISO-8601 lower bound on created_at.")
+      description:
+        "List messages in an inbox, newest first. Filter by labels (comma-separated) or time bounds.",
+      inputSchema: {
+        inbox_id: inboxId,
+        ...pagination,
+        labels: z.array(z.string()).optional().describe("Only messages with all of these labels."),
+        before: z.string().optional().describe("ISO-8601 upper bound on created_at."),
+        after: z.string().optional().describe("ISO-8601 lower bound on created_at.")
+      },
+      _meta: uiToolMeta(MAILBOX_RESOURCE_URI)
     },
     wrap(({ inbox_id, labels, ...query }) =>
       api.request({
@@ -116,10 +129,14 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "get_message",
-    "Get one message including text, html, extracted_text, and attachment metadata.",
-    { inbox_id: inboxId, message_id: messageId },
+    {
+      description:
+        "Get one message including text, html, extracted_text, and attachment metadata.",
+      inputSchema: { inbox_id: inboxId, message_id: messageId },
+      _meta: uiToolMeta(MESSAGE_RESOURCE_URI)
+    },
     wrap(({ inbox_id, message_id }) =>
       api.request({
         method: "GET",
@@ -128,10 +145,14 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "send_message",
-    "Send a new email from an inbox. Returns the created message with message_id and thread_id.",
-    { inbox_id: inboxId, ...SendMessageInput.shape },
+    {
+      description:
+        "Send a new email from an inbox. Returns the created message with message_id and thread_id.",
+      inputSchema: { inbox_id: inboxId, ...SendMessageInput.shape },
+      _meta: uiToolMeta(MESSAGE_RESOURCE_URI)
+    },
     wrap(({ inbox_id, ...body }) =>
       api.request({
         method: "POST",
@@ -141,10 +162,14 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "reply_to_message",
-    "Reply to a message (sender only). Threading headers are set automatically.",
-    replyShape,
+    {
+      description:
+        "Reply to a message (sender only). Threading headers are set automatically.",
+      inputSchema: replyShape,
+      _meta: uiToolMeta(MESSAGE_RESOURCE_URI)
+    },
     wrap(({ inbox_id, message_id, ...body }) =>
       api.request({
         method: "POST",
@@ -248,10 +273,13 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "list_drafts",
-    "List draft messages in an inbox.",
-    { inbox_id: inboxId, ...pagination },
+    {
+      description: "List draft messages in an inbox.",
+      inputSchema: { inbox_id: inboxId, ...pagination },
+      _meta: uiToolMeta(MAILBOX_RESOURCE_URI)
+    },
     wrap(({ inbox_id, ...query }) =>
       api.request({
         method: "GET",
@@ -261,10 +289,14 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "create_draft",
-    "Create a draft (not sent until send_draft). Use this when send permission is held elsewhere.",
-    { inbox_id: inboxId, ...SendMessageInput.shape },
+    {
+      description:
+        "Create a draft (not sent until send_draft). Use this when send permission is held elsewhere.",
+      inputSchema: { inbox_id: inboxId, ...SendMessageInput.shape },
+      _meta: uiToolMeta(MESSAGE_RESOURCE_URI)
+    },
     wrap(({ inbox_id, ...body }) =>
       api.request({
         method: "POST",
@@ -291,10 +323,13 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     )
   );
 
-  server.tool(
+  server.registerTool(
     "send_draft",
-    "Send a previously created draft.",
-    { inbox_id: inboxId, draft_id: z.string() },
+    {
+      description: "Send a previously created draft.",
+      inputSchema: { inbox_id: inboxId, draft_id: z.string() },
+      _meta: uiToolMeta(MESSAGE_RESOURCE_URI)
+    },
     wrap(({ inbox_id, draft_id }) =>
       api.request({
         method: "POST",
