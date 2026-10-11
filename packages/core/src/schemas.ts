@@ -210,8 +210,8 @@ export const CreateTemplateInput = z.object({
   name: z.string().min(1).max(200),
   alias: z.string().regex(TEMPLATE_ALIAS_RE, "lowercase letters, digits, - and _ only").optional(),
   subject: z.string().max(998).default(""),
-  text: z.string().optional(),
-  html: z.string().optional(),
+  text: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
   variables: z.array(TemplateVariable).max(100).optional(),
   client_id: z.string().max(256).optional()
 });
