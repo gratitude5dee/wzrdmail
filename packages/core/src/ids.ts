@@ -31,7 +31,8 @@ export type IdPrefix =
   | "evt"
   | "ses"
   | "draft"
-  | "share";
+  | "share"
+  | "tpl";
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;
