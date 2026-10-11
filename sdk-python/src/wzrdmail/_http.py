@@ -53,16 +53,19 @@ class HttpClient:
     def close(self) -> None:
         self._client.close()
 
-    def request(
+    def _send(
         self,
         method: str,
         path: str,
         *,
         query: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         auth: bool = True,
-    ) -> Any:
-        headers: dict[str, str] = {"Accept": "application/json"}
+    ) -> httpx.Response:
+        request_headers: dict[str, str] = {"Accept": "application/json"}
+        if headers:
+            request_headers.update(headers)
         if auth:
             if not self._api_key:
                 raise WzrdmailError(
@@ -71,7 +74,7 @@ class HttpClient:
                     "wzrdmail: api_key is required for this call "
                     "(set WZRDMAIL_API_KEY or pass api_key=...)",
                 )
-            headers["Authorization"] = f"Bearer {self._api_key}"
+            request_headers["Authorization"] = f"Bearer {self._api_key}"
 
         params = (
             {k: v for k, v in query.items() if v is not None} if query else None
@@ -84,7 +87,7 @@ class HttpClient:
                 f"{self._base_url}{path}",
                 params=params,
                 json=body,
-                headers=headers,
+                headers=request_headers,
             )
             if response.status_code == 429 and attempt < MAX_RETRIES:
                 retry_after_ms = _parse_retry_after_ms(response.headers.get("Retry-After"))
@@ -108,7 +111,32 @@ class HttpClient:
                 "internal_error",
                 f"unexpected error response (HTTP {response.status_code})",
             )
+        return response
 
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        auth: bool = True,
+    ) -> Any:
+        response = self._send(
+            method, path, query=query, body=body, headers=headers, auth=auth
+        )
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, Any] | None = None,
+        auth: bool = True,
+    ) -> bytes:
+        """Binary download (attachment bodies, raw MIME)."""
+        return self._send(method, path, query=query, auth=auth).content
