@@ -122,6 +122,32 @@ export function DomainsPage() {
     }
   };
 
+  const [editing, setEditing] = useState<Domain | null>(null);
+  const [returnPath, setReturnPath] = useState("");
+
+  const openEdit = (domain: Domain) => {
+    setReturnPath(domain.custom_return_path ?? "");
+    setEditing(domain);
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/domains/${editing.domain_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ custom_return_path: returnPath.trim() || null })
+      });
+      setEditing(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not update domain");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-head">
@@ -188,6 +214,9 @@ export function DomainsPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <b className="mono">{domain.name}</b>
               {statusChip(domain.status)}
+              {domain.custom_return_path && (
+                <span className="dim mono">return-path: {domain.custom_return_path}</span>
+              )}
               <span style={{ flex: 1 }} />
               <button
                 className="btn"
@@ -196,6 +225,9 @@ export function DomainsPage() {
                 }
               >
                 {expanded === domain.domain_id ? "Hide records" : "DNS records"}
+              </button>
+              <button className="btn" onClick={() => openEdit(domain)}>
+                Edit
               </button>
               {domain.status !== "verified" && (
                 <button className="btn primary" disabled={busy} onClick={() => void verify(domain)}>
@@ -223,6 +255,34 @@ export function DomainsPage() {
             )}
           </div>
         ))
+      )}
+
+      {editing && (
+        <div className="modal-backdrop" onClick={() => setEditing(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Edit {editing.name}</h2>
+            <div className="field">
+              <label>Custom return path (optional subdomain for bounces)</label>
+              <input
+                className="mono"
+                value={returnPath}
+                onChange={(e) => setReturnPath(e.target.value)}
+                placeholder="bounces.acme.com"
+              />
+              <div className="dim">
+                Bounce/complaint reports route to this address instead of the default.
+              </div>
+            </div>
+            <div className="foot">
+              <button className="btn" onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+              <button className="btn primary" disabled={busy} onClick={() => void saveEdit()}>
+                {busy ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

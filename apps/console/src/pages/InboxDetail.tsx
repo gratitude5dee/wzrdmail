@@ -7,7 +7,9 @@ import {
   apiAll,
   type Attachment,
   type Draft,
+  type EventEnvelope,
   type Message,
+  type ShareLink,
   type Thread
 } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
@@ -319,6 +321,7 @@ function ScheduledFolder({ inboxId }: { inboxId: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [newTimes, setNewTimes] = useState<Record<string, string>>({});
   const base = `/inboxes/${encodeURIComponent(inboxId)}/messages`;
 
   const load = useCallback(async () => {
@@ -338,10 +341,29 @@ function ScheduledFolder({ inboxId }: { inboxId: string }) {
     setBusy(messageId);
     setError(null);
     try {
-      await api(`${base}/${messageId}`, { method: "DELETE" });
+      await api(`${base}/${messageId}/cancel`, { method: "POST", body: "{}" });
       await load();
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "could not cancel");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reschedule = async (messageId: string) => {
+    const value = newTimes[messageId];
+    if (!value) return;
+    setBusy(messageId);
+    setError(null);
+    try {
+      await api(`${base}/${messageId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ send_at: new Date(value).toISOString() })
+      });
+      setNewTimes((prev) => ({ ...prev, [messageId]: "" }));
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not reschedule");
     } finally {
       setBusy(null);
     }
@@ -364,20 +386,39 @@ function ScheduledFolder({ inboxId }: { inboxId: string }) {
               <tr key={m.message_id}>
                 <td>
                   <div className="thread-row">
+                    {m.state === "cancelled" && <span className="chip red">cancelled</span>}
                     <span className="subject">{m.subject || "(no subject)"}</span>
                     <span className="snippet">to {m.to.join(", ")}</span>
                   </div>
                 </td>
                 <td className="dim" style={{ whiteSpace: "nowrap" }}>
                   {m.send_at ? `sends ${new Date(m.send_at).toLocaleString()}` : ""}
+                  <input
+                    type="datetime-local"
+                    style={{ marginLeft: 8, padding: "4px 6px" }}
+                    value={newTimes[m.message_id] ?? ""}
+                    onChange={(e) =>
+                      setNewTimes((prev) => ({ ...prev, [m.message_id]: e.target.value }))
+                    }
+                  />
                   <button
                     className="btn sm"
                     style={{ marginLeft: 8 }}
-                    disabled={busy === m.message_id}
-                    onClick={() => void cancel(m.message_id)}
+                    disabled={busy === m.message_id || !(newTimes[m.message_id] ?? "")}
+                    onClick={() => void reschedule(m.message_id)}
                   >
-                    Cancel
+                    Reschedule
                   </button>
+                  {m.state !== "cancelled" && (
+                    <button
+                      className="btn sm"
+                      style={{ marginLeft: 8 }}
+                      disabled={busy === m.message_id}
+                      onClick={() => void cancel(m.message_id)}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -562,6 +603,8 @@ function MessageBody({ message }: { message: Message }) {
 }
 
 function MessageCard({ message }: { message: Message }) {
+  const [showEvents, setShowEvents] = useState(false);
+  const [sharing, setSharing] = useState(false);
   return (
     <div className="msg">
       <div className="head">
@@ -570,9 +613,37 @@ function MessageCard({ message }: { message: Message }) {
         </span>
         <span>
           <span className="chip">{message.direction}</span>{" "}
+          {typeof message.x_open_count === "number" && message.x_open_count > 0 && (
+            <span
+              className="chip green"
+              title={
+                message.x_last_opened_at
+                  ? `last opened ${new Date(message.x_last_opened_at).toLocaleString()}`
+                  : undefined
+              }
+            >
+              opened ×{message.x_open_count}
+            </span>
+          )}{" "}
+          {typeof message.x_click_count === "number" && message.x_click_count > 0 && (
+            <span className="chip green">clicked ×{message.x_click_count}</span>
+          )}{" "}
           {new Date(message.created_at).toLocaleString()}
         </span>
       </div>
+      <div className="message-body-actions" style={{ marginBottom: 8 }}>
+        <button
+          className={`btn sm${showEvents ? " primary" : ""}`}
+          type="button"
+          onClick={() => setShowEvents((v) => !v)}
+        >
+          Events
+        </button>
+        <button className="btn sm" type="button" onClick={() => setSharing(true)}>
+          Share
+        </button>
+      </div>
+      {showEvents && <MessageEvents message={message} />}
       <MessageBody message={message} />
       {message.attachments.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -590,6 +661,141 @@ function MessageCard({ message }: { message: Message }) {
           ))}
         </div>
       )}
+      {sharing && <ShareModal message={message} onClose={() => setSharing(false)} />}
+    </div>
+  );
+}
+
+/** Per-message event timeline (`GET .../messages/:id/events`). */
+function MessageEvents({ message }: { message: Message }) {
+  const [events, setEvents] = useState<EventEnvelope[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiAll<EventEnvelope>(
+      `/inboxes/${encodeURIComponent(message.inbox_id)}/messages/${encodeURIComponent(message.message_id)}/events?limit=100`,
+      "events"
+    )
+      .then((rows) => {
+        if (!cancelled) setEvents(rows);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setError(err instanceof ApiRequestError ? err.message : "could not load events");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [message.inbox_id, message.message_id]);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!events) return <p className="dim">Loading events…</p>;
+  if (events.length === 0) return <p className="dim">No events recorded for this message yet.</p>;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      {events.map((ev) => (
+        <div key={ev.event_id} className="thread-row" style={{ padding: "2px 0" }}>
+          <span className="chip">{ev.type}</span>
+          <span className="dim" style={{ marginLeft: 8 }}>
+            {new Date(ev.created_at).toLocaleString()}
+          </span>
+          {Object.keys(ev.data ?? {}).length > 0 && (
+            <button
+              className="btn"
+              style={{ marginLeft: 8, padding: "0 6px" }}
+              onClick={() => setExpanded(expanded === ev.event_id ? null : ev.event_id)}
+            >
+              {expanded === ev.event_id ? "hide" : "data"}
+            </button>
+          )}
+          {expanded === ev.event_id && (
+            <pre className="code" style={{ flexBasis: "100%" }}>
+              {JSON.stringify(ev.data, null, 2)}
+            </pre>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const SHARE_EXPIRY_OPTIONS = [
+  { label: "24 hours", seconds: 86400 },
+  { label: "3 days", seconds: 259200 },
+  { label: "7 days", seconds: 604800 }
+] as const;
+
+/** `POST .../messages/:id/share` → one-shot public link to the sanitized body. */
+function ShareModal({ message, onClose }: { message: Message; onClose: () => void }) {
+  const [expiresIn, setExpiresIn] = useState<number>(SHARE_EXPIRY_OPTIONS[0].seconds);
+  const [link, setLink] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<ShareLink>(
+        `/inboxes/${encodeURIComponent(message.inbox_id)}/messages/${encodeURIComponent(message.message_id)}/share`,
+        { method: "POST", body: JSON.stringify({ expires_in: expiresIn }) }
+      );
+      setLink(res.share_url);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not create share link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Share message</h2>
+        <p className="dim">
+          Anyone with the link can view a snapshot of this message until it expires.
+        </p>
+        {link ? (
+          <>
+            <pre className="code" style={{ overflowWrap: "anywhere" }}>{link}</pre>
+            <div className="foot">
+              <button className="btn" onClick={() => void navigator.clipboard.writeText(link)}>
+                Copy link
+              </button>
+              <button className="btn primary" onClick={onClose}>
+                Done
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <label>Expires in</label>
+              <select
+                value={expiresIn}
+                onChange={(e) => setExpiresIn(Number(e.target.value))}
+              >
+                {SHARE_EXPIRY_OPTIONS.map((o) => (
+                  <option key={o.seconds} value={o.seconds}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {error && <p className="error">{error}</p>}
+            <div className="foot">
+              <button className="btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button className="btn primary" disabled={busy} onClick={() => void create()}>
+                {busy ? "Creating…" : "Create link"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

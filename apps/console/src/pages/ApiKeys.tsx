@@ -49,6 +49,32 @@ export function ApiKeysPage() {
     await load();
   };
 
+  const [renaming, setRenaming] = useState<ApiKey | null>(null);
+  const [renameTo, setRenameTo] = useState("");
+
+  const openRename = (key: ApiKey) => {
+    setRenameTo(key.name ?? "");
+    setRenaming(key);
+  };
+
+  const rename = async () => {
+    if (!renaming) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api-keys/${renaming.key_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: renameTo.trim() })
+      });
+      setRenaming(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not rename key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-head">
@@ -97,7 +123,10 @@ export function ApiKeysPage() {
                     {key.last_used_at ? new Date(key.last_used_at).toLocaleString() : "never"}
                   </td>
                   <td className="dim">{new Date(key.created_at).toLocaleDateString()}</td>
-                  <td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn sm" onClick={() => openRename(key)}>
+                      Rename
+                    </button>{" "}
                     <button className="btn sm danger" onClick={() => void revoke(key)}>
                       Revoke
                     </button>
@@ -106,6 +135,39 @@ export function ApiKeysPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {renaming && (
+        <div className="modal-backdrop" onClick={() => setRenaming(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Rename API key</h2>
+            <p className="dim mono">{renaming.key_preview}</p>
+            <div className="field">
+              <label>Name</label>
+              <input
+                value={renameTo}
+                onChange={(e) => setRenameTo(e.target.value)}
+                placeholder="my-agent"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && renameTo.trim()) void rename();
+                }}
+              />
+            </div>
+            {error && <p className="error">{error}</p>}
+            <div className="foot">
+              <button className="btn" onClick={() => setRenaming(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn primary"
+                disabled={busy || !renameTo.trim()}
+                onClick={() => void rename()}
+              >
+                {busy ? "Saving…" : "Rename"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

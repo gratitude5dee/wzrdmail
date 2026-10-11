@@ -13,6 +13,7 @@ import { MuseConnectPage } from "./pages/MuseConnect";
 import { MetricsPage } from "./pages/Metrics";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
+import { TemplatesPage } from "./pages/Templates";
 import { UpgradePage } from "./pages/Upgrade";
 import { WebhooksPage } from "./pages/Webhooks";
 
@@ -57,6 +58,7 @@ export function App() {
           <Route path="/webhooks" element={<WebhooksPage />} />
           <Route path="/api-keys" element={<ApiKeysPage />} />
           <Route path="/lists" element={<ListsPage />} />
+          <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/upgrade" element={<UpgradePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

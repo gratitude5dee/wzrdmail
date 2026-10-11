@@ -64,6 +64,8 @@ export interface Inbox {
   username: string;
   domain: string;
   display_name: string | null;
+  x_open_tracking?: boolean;
+  x_click_tracking?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +110,9 @@ export interface Message {
   attachments: Attachment[];
   send_at: string | null;
   deleted_at: string | null;
+  x_open_count?: number;
+  x_click_count?: number;
+  x_last_opened_at?: string | null;
   created_at: string;
 }
 
@@ -150,6 +155,7 @@ export interface Domain {
   failure_reason: string | null;
   verified_at: string | null;
   last_checked_at: string | null;
+  custom_return_path?: string | null;
   dns_records: DnsRecord[];
   created_at: string;
   updated_at: string;
@@ -215,4 +221,51 @@ export interface Metrics {
   since: string;
   totals: Record<string, number>;
   series: { bucket: string; type: string; count: number }[];
+}
+
+export interface Pod {
+  pod_id: string;
+  organization_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface EventEnvelope {
+  event_id: string;
+  type: string;
+  created_at: string;
+  organization_id?: string;
+  pod_id?: string;
+  inbox_id?: string;
+  data: Record<string, unknown>;
+}
+
+export interface Suppression {
+  address: string;
+  reason: "bounce" | "complaint" | "manual" | string;
+  source_msg_id: string | null;
+  created_at: string;
+}
+
+export interface ShareLink {
+  share_url: string;
+}
+
+export interface TemplateVariable {
+  key: string;
+  type?: string;
+  fallback_value?: string | null;
+}
+
+export interface Template {
+  template_id: string;
+  name: string;
+  subject: string | null;
+  text: string | null;
+  html: string | null;
+  variables: TemplateVariable[];
+  status: "draft" | "published" | string;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
 }

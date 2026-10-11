@@ -56,6 +56,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {item("/webhooks", "zap", "Webhooks")}
         {item("/api-keys", "key", "API Keys")}
         {item("/lists", "shield", "Lists")}
+        {item("/templates", "template", "Templates")}
         <div className="spacer" />
         {item("/settings", "settings", "Settings")}
         <NavLink to="/upgrade" className="navlink upgrade">
