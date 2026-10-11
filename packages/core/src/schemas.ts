@@ -125,12 +125,15 @@ export const ReplyTo = z.union([
 ]);
 export type ReplyTo = z.infer<typeof ReplyTo>;
 
-/** Resend-style template reference on a send: body comes from the template. */
+/** Resend-style template reference on a send: body comes from the template.
+ * `id` accepts a template_id or org-unique alias. */
 export const SendTemplateInput = z.object({
   id: z.string().min(1),
   variables: z.record(z.unknown()).optional()
 });
 export type SendTemplateInput = z.infer<typeof SendTemplateInput>;
+export const TemplateSendRef = SendTemplateInput;
+export type TemplateSendRef = SendTemplateInput;
 
 export const SendMessageInput = z.object({
   to: z.array(z.string().email()).min(1),
@@ -143,7 +146,7 @@ export const SendMessageInput = z.object({
   headers: z.record(z.string()).optional(),
   attachments: z.array(SendAttachmentInput).optional(),
   labels: z.array(z.string()).optional(),
-  /** Mutually exclusive with text/html server-side: body rendered from template. */
+  /** Render a published org template server-side (mutually exclusive with text/html — enforced at send). */
   template: SendTemplateInput.optional(),
   client_id: z.string().max(256).optional(),
   send_at: IsoTimestamp.optional()
@@ -159,6 +162,77 @@ export const UpdateApiKeyInput = z.object({
   name: z.string().min(1).max(80).nullable().optional()
 });
 export type UpdateApiKeyInput = z.infer<typeof UpdateApiKeyInput>;
+
+/** A template variable declaration (Resend parity). */
+export const TemplateStatus = z.enum(["draft", "published"]);
+export type TemplateStatus = z.infer<typeof TemplateStatus>;
+
+export const TemplateVariable = z.object({
+  key: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier"),
+  type: z.enum(["string", "number", "boolean", "object", "list"]).default("string"),
+  /** Used when the caller omits the variable at send time; absent = required. */
+  fallback_value: z.unknown().optional()
+});
+export type TemplateVariable = z.infer<typeof TemplateVariable>;
+
+/** Fields that are snapshotted at publish time and rendered at send time. */
+export const TemplateBody = z.object({
+  subject: z.string().default(""),
+  text: z.string().nullable(),
+  html: z.string().nullable(),
+  variables: z.array(TemplateVariable).default([])
+});
+export type TemplateBody = z.infer<typeof TemplateBody>;
+
+export const Template = z.object({
+  template_id: z.string(),
+  organization_id: z.string(),
+  name: z.string(),
+  alias: z.string().nullable(),
+  subject: z.string().default(""),
+  text: z.string().nullable(),
+  html: z.string().nullable(),
+  variables: z.array(TemplateVariable).default([]),
+  status: TemplateStatus,
+  /** Immutable snapshot rendered at send time; null until first publish. */
+  published: TemplateBody.nullable(),
+  published_at: IsoTimestamp.nullable(),
+  client_id: z.string().nullable(),
+  created_at: IsoTimestamp,
+  updated_at: IsoTimestamp
+});
+export type Template = z.infer<typeof Template>;
+
+export const TEMPLATE_ALIAS_RE = /^[a-z0-9][a-z0-9_-]{0,127}$/;
+
+export const CreateTemplateInput = z.object({
+  name: z.string().min(1).max(200),
+  alias: z.string().regex(TEMPLATE_ALIAS_RE, "lowercase letters, digits, - and _ only").optional(),
+  subject: z.string().max(998).default(""),
+  text: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
+  variables: z.array(TemplateVariable).max(100).optional(),
+  client_id: z.string().max(256).optional()
+});
+export type CreateTemplateInput = z.infer<typeof CreateTemplateInput>;
+
+export const UpdateTemplateInput = z.object({
+  name: z.string().min(1).max(200).optional(),
+  alias: z
+    .string()
+    .regex(TEMPLATE_ALIAS_RE, "lowercase letters, digits, - and _ only")
+    .nullable()
+    .optional(),
+  subject: z.string().max(998).optional(),
+  text: z.string().nullable().optional(),
+  html: z.string().nullable().optional(),
+  variables: z.array(TemplateVariable).max(100).optional()
+});
+export type UpdateTemplateInput = z.infer<typeof UpdateTemplateInput>;
 
 export const CreatePodInput = z.object({
   name: z.string().min(1).max(128).optional(),
@@ -485,44 +559,3 @@ export const ShareLink = z.object({
   created_at: IsoTimestamp
 });
 export type ShareLink = z.infer<typeof ShareLink>;
-
-export const TemplateStatus = z.enum(["draft", "published"]);
-export type TemplateStatus = z.infer<typeof TemplateStatus>;
-
-export const Template = z.object({
-  template_id: z.string(),
-  organization_id: z.string().nullable().optional(),
-  name: z.string(),
-  subject: z.string().nullable().optional(),
-  from: z.string().nullable().optional(),
-  reply_to: z.string().nullable().optional(),
-  html: z.string().nullable().optional(),
-  text: z.string().nullable().optional(),
-  status: TemplateStatus,
-  client_id: z.string().nullable().optional(),
-  published_at: IsoTimestamp.nullable().optional(),
-  created_at: IsoTimestamp,
-  updated_at: IsoTimestamp
-});
-export type Template = z.infer<typeof Template>;
-
-export const CreateTemplateInput = z.object({
-  name: z.string().min(1).max(128),
-  subject: z.string().optional(),
-  from: z.string().optional(),
-  reply_to: z.string().email().optional(),
-  html: z.string().optional(),
-  text: z.string().optional(),
-  client_id: z.string().max(256).optional()
-});
-export type CreateTemplateInput = z.infer<typeof CreateTemplateInput>;
-
-export const UpdateTemplateInput = z.object({
-  name: z.string().min(1).max(128).optional(),
-  subject: z.string().nullable().optional(),
-  from: z.string().nullable().optional(),
-  reply_to: z.string().email().nullable().optional(),
-  html: z.string().nullable().optional(),
-  text: z.string().nullable().optional()
-});
-export type UpdateTemplateInput = z.infer<typeof UpdateTemplateInput>;

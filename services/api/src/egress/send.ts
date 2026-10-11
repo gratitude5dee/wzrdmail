@@ -13,6 +13,7 @@ import { createMimeMessage } from "mimetext/browser";
 import type { Env } from "../env.js";
 import { bumpUsage, emitEvent } from "../lib/events.js";
 import { injectTracking } from "../lib/tracking.js";
+import { loadPublishedTemplate, renderPublishedTemplate } from "../lib/templates.js";
 
 export interface SendContext {
   inbox_id: string;
@@ -275,11 +276,30 @@ async function doSend(
     );
   }
 
+  // Template send: render the org's immutable published snapshot. The schema
+  // already rejects template+text/html; re-check here for direct callers.
+  let text = input.text;
+  let html = input.html;
+  let subject = input.subject ?? "";
+  if (input.template) {
+    if (input.text !== undefined || input.html !== undefined) {
+      throw new ApiError(
+        "validation_error",
+        "template is mutually exclusive with text and html"
+      );
+    }
+    const row = await loadPublishedTemplate(env.DB, ctx.org_id, input.template.id);
+    const rendered = renderPublishedTemplate(row, input.template.variables);
+    // An explicit subject overrides the template's; bodies come only from it.
+    if (!subject) subject = rendered.subject;
+    text = rendered.text;
+    html = rendered.html;
+  }
+
   const msgId = newId("msg");
   const domain = ctx.inbox_id.slice(ctx.inbox_id.lastIndexOf("@") + 1);
   const rfc822MessageId = `<${msgId}@${domain}>`;
   const now = new Date().toISOString();
-  const subject = input.subject ?? "";
   // Normalize to UTC: dispatch compares timestamp strings, so an offset
   // timestamp would sort incorrectly against ISO-Z values.
   const sendAt =
@@ -290,7 +310,7 @@ async function doSend(
   // Open/click tracking (spec §3 P3): per-inbox flags rewrite the transmitted
   // MIME only — the stored html stays the author's original so rendering it
   // in the console never self-counts an open or click.
-  let trackedHtml = input.html;
+  let trackedHtml = html;
   if (trackedHtml) {
     const flags = await env.DB.prepare(
       "SELECT x_open_tracking, x_click_tracking FROM inboxes WHERE inbox_id = ?"
@@ -332,9 +352,9 @@ async function doSend(
     }
     mime.setHeader(key, value);
   }
-  if (input.text) mime.addMessage({ contentType: "text/plain", data: input.text });
+  if (text) mime.addMessage({ contentType: "text/plain", data: text });
   if (trackedHtml) mime.addMessage({ contentType: "text/html", data: trackedHtml });
-  if (!input.text && !input.html) {
+  if (!text && !html) {
     mime.addMessage({ contentType: "text/plain", data: "" });
   }
   const resolvedAttachments = await resolveAttachments(input.attachments);
@@ -406,7 +426,7 @@ async function doSend(
     candidates
   });
   const threadId = resolution.kind === "existing" ? resolution.thread_id : newId("thread");
-  const preview = (input.text ?? "").slice(0, 140);
+  const preview = (text ?? "").slice(0, 140);
 
   // Verify reservation ownership before any deliverable state is committed:
   // a stale claimant whose reservation was taken over must not schedule or
@@ -461,8 +481,8 @@ async function doSend(
       msgId, ctx.org_id, ctx.pod_id, ctx.inbox_id, threadId,
       sendAt ? "scheduled" : "queued",
       ctx.inbox_id, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc),
-      subject, input.text ?? null, input.html ?? null,
-      input.text ?? null, input.html ?? null,
+      subject, text ?? null, html ?? null,
+      text ?? null, html ?? null,
       JSON.stringify(input.labels ?? []), rfc822MessageId,
       refIds[0] ?? null, input.client_id ?? null, rawR2Key, sendAt, now, now
     )
@@ -615,8 +635,8 @@ async function doSend(
         cc,
         bcc,
         subject,
-        text: input.text ?? null,
-        html: input.html ?? null,
+        text: text ?? null,
+        html: html ?? null,
         rfc822_message_id: rfc822MessageId,
         created_at: now,
         updated_at: now

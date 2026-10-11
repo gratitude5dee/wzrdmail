@@ -216,6 +216,60 @@ export function listEntryJson(row: ListEntryRow): Record<string, unknown> {
   };
 }
 
+export interface TemplateRow {
+  template_id: string;
+  org_id: string;
+  name: string;
+  alias: string | null;
+  subject: string;
+  text: string | null;
+  html: string | null;
+  variables: string;
+  published_subject: string | null;
+  published_text: string | null;
+  published_html: string | null;
+  published_variables: string | null;
+  published_at: string | null;
+  client_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function jsonUnknownArray(value: string | null): unknown[] {
+  try {
+    const parsed = JSON.parse(value ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function templateJson(row: TemplateRow): Record<string, unknown> {
+  return {
+    template_id: row.template_id,
+    organization_id: row.org_id,
+    name: row.name,
+    alias: row.alias,
+    subject: row.subject,
+    text: row.text,
+    html: row.html,
+    variables: jsonUnknownArray(row.variables),
+    status: row.published_at ? "published" : "draft",
+    published: row.published_at
+      ? {
+          subject: row.published_subject ?? "",
+          text: row.published_text,
+          html: row.published_html,
+          variables: jsonUnknownArray(row.published_variables)
+        }
+      : null,
+    published_at: row.published_at,
+    client_id: row.client_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
 /** The signing secret is only included on create (`includeSecret`). */
 export function webhookJson(
   row: WebhookRow,

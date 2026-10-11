@@ -206,6 +206,53 @@ export interface ApiKey {
   created_at: string;
 }
 
+export interface TemplateVariable {
+  key: string;
+  type: "string" | "number" | "boolean" | "object" | "list";
+  fallback_value?: unknown;
+}
+
+export interface TemplateBody {
+  subject: string;
+  text: string | null;
+  html: string | null;
+  variables: TemplateVariable[];
+}
+
+export interface Template extends TemplateBody {
+  template_id: string;
+  organization_id: string;
+  name: string;
+  alias: string | null;
+  status: "draft" | "published";
+  /** Immutable snapshot rendered at send time; null until first publish. */
+  published: TemplateBody | null;
+  published_at: string | null;
+  client_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateInput {
+  name: string;
+  alias?: string;
+  subject?: string;
+  text?: string | null;
+  html?: string | null;
+  variables?: TemplateVariable[];
+}
+
+export const templatesApi = {
+  list: () => apiAll<Template>("/templates?limit=100", "templates"),
+  create: (input: TemplateInput) =>
+    api<Template>("/templates", { method: "POST", body: JSON.stringify(input) }),
+  update: (id: string, input: Partial<TemplateInput>) =>
+    api<Template>(`/templates/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  publish: (id: string) => api<Template>(`/templates/${id}/publish`, { method: "POST" }),
+  duplicate: (id: string) => api<Template>(`/templates/${id}/duplicate`, { method: "POST" }),
+  remove: (id: string) => api(`/templates/${id}`, { method: "DELETE" })
+};
+
 export interface UsageEntry {
   used: number;
   limit: number | null;
@@ -250,23 +297,4 @@ export interface Suppression {
 
 export interface ShareLink {
   share_url: string;
-}
-
-export interface TemplateVariable {
-  key: string;
-  type?: string;
-  fallback_value?: string | null;
-}
-
-export interface Template {
-  template_id: string;
-  name: string;
-  subject: string | null;
-  text: string | null;
-  html: string | null;
-  variables: TemplateVariable[];
-  status: "draft" | "published" | string;
-  published_at: string | null;
-  created_at: string;
-  updated_at: string;
 }

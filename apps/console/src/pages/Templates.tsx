@@ -1,82 +1,173 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiRequestError,
-  api,
-  apiAll,
+  templatesApi,
   type Template,
   type TemplateVariable
 } from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const STATUS_FILTERS = ["All", "Draft", "Published"] as const;
+const VAR_TYPES: TemplateVariable["type"][] = ["string", "number", "boolean", "object", "list"];
 
-/** `key=fallback` per line — blank fallback means "required". */
-function parseVariables(text: string): TemplateVariable[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const eq = line.indexOf("=");
-      if (eq === -1) return { key: line };
-      return { key: line.slice(0, eq).trim(), fallback_value: line.slice(eq + 1).trim() };
-    });
+interface VarRow {
+  key: string;
+  type: TemplateVariable["type"];
+  /** Raw text: stored verbatim for strings, JSON-parsed for other types. */
+  fallback: string;
 }
 
-function variablesToText(variables: TemplateVariable[] | undefined): string {
-  return (variables ?? [])
-    .map((v) => (v.fallback_value != null && v.fallback_value !== "" ? `${v.key}=${v.fallback_value}` : v.key))
-    .join("\n");
+interface EditorState {
+  templateId: string | null; // null = creating
+  name: string;
+  alias: string;
+  subject: string;
+  text: string;
+  html: string;
+  vars: VarRow[];
+}
+
+const EMPTY_EDITOR: EditorState = {
+  templateId: null,
+  name: "",
+  alias: "",
+  subject: "",
+  text: "",
+  html: "",
+  vars: []
+};
+
+function varToRow(v: TemplateVariable): VarRow {
+  return {
+    key: v.key,
+    type: v.type,
+    fallback:
+      v.fallback_value === undefined
+        ? ""
+        : v.type === "string"
+          ? String(v.fallback_value)
+          : JSON.stringify(v.fallback_value)
+  };
+}
+
+function rowsToVariables(rows: VarRow[]): TemplateVariable[] {
+  return rows
+    .filter((r) => r.key.trim())
+    .map((r) => {
+      const out: TemplateVariable = { key: r.key.trim(), type: r.type };
+      if (r.fallback !== "") {
+        if (r.type === "string") out.fallback_value = r.fallback;
+        else out.fallback_value = JSON.parse(r.fallback);
+      }
+      return out;
+    });
 }
 
 export function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("All");
-  const [editing, setEditing] = useState<Template | "new" | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [showApi, setShowApi] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      setTemplates(await apiAll<Template>("/templates?limit=100", "templates"));
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not load templates");
-      setTemplates([]);
-    }
+    setTemplates(await templatesApi.list());
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const run = async (templateId: string, action: string) => {
-    setBusy(templateId + action);
+  const openCreate = () => {
+    setError(null);
+    setEditor({ ...EMPTY_EDITOR });
+  };
+
+  const openEdit = (t: Template) => {
+    setError(null);
+    setEditor({
+      templateId: t.template_id,
+      name: t.name,
+      alias: t.alias ?? "",
+      subject: t.subject,
+      text: t.text ?? "",
+      html: t.html ?? "",
+      vars: t.variables.map(varToRow)
+    });
+  };
+
+  const save = async () => {
+    if (!editor) return;
+    setBusy(true);
     setError(null);
     try {
-      await api(`/templates/${templateId}/${action}`, { method: "POST", body: "{}" });
+      let variables: TemplateVariable[];
+      try {
+        variables = rowsToVariables(editor.vars);
+      } catch {
+        throw new Error("a non-string variable fallback must be valid JSON");
+      }
+      const input = {
+        name: editor.name.trim(),
+        ...(editor.alias.trim() ? { alias: editor.alias.trim() } : {}),
+        subject: editor.subject,
+        text: editor.text !== "" ? editor.text : null,
+        html: editor.html !== "" ? editor.html : null,
+        variables
+      };
+      if (editor.templateId) {
+        await templatesApi.update(editor.templateId, input);
+      } else {
+        await templatesApi.create(input);
+      }
+      setEditor(null);
       await load();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : `could not ${action} template`);
+      setError(
+        err instanceof ApiRequestError || err instanceof Error
+          ? err.message
+          : "could not save template"
+      );
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
-  const remove = async (template: Template) => {
-    if (!window.confirm(`Delete template ${template.name}?`)) return;
-    setError(null);
+  const publish = async (t: Template) => {
+    setBusy(true);
     try {
-      await api(`/templates/${template.template_id}`, { method: "DELETE" });
+      await templatesApi.publish(t.template_id);
       await load();
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not delete template");
+    } finally {
+      setBusy(false);
     }
   };
 
-  const visible = templates.filter(
-    (t) => statusFilter === "All" || t.status === statusFilter.toLowerCase()
-  );
+  const duplicate = async (t: Template) => {
+    await templatesApi.duplicate(t.template_id);
+    await load();
+  };
+
+  const remove = async (t: Template) => {
+    if (!window.confirm(`Delete template "${t.name}"?`)) return;
+    await templatesApi.remove(t.template_id);
+    await load();
+  };
+
+  const setVar = (i: number, patch: Partial<VarRow>) =>
+    setEditor((e) =>
+      e ? { ...e, vars: e.vars.map((v, j) => (j === i ? { ...v, ...patch } : v)) } : e
+    );
+
+  const hasUnpublishedChanges = (t: Template) =>
+    t.published_at !== null && new Date(t.updated_at) > new Date(t.published_at);
+
+  const visible = templates.filter((t) => {
+    if (statusFilter === "All") return true;
+    return t.status === statusFilter.toLowerCase();
+  });
 
   return (
     <div>
@@ -86,36 +177,32 @@ export function TemplatesPage() {
           <button className="btn" onClick={() => setShowApi(true)}>
             Use API
           </button>
-          <button className="btn primary" onClick={() => setEditing("new")}>
+          <button className="btn primary" onClick={openCreate}>
             + New Template
           </button>
         </div>
       </div>
 
       <p className="dim">
-        Reusable transactional bodies your agents reference at send time with{" "}
-        <span className="mono">template: {"{id, variables}"}</span>. Variables render as{" "}
-        <span className="mono">{"{{key}}"}</span> in subject and body.
+        Org-wide reusable bodies for transactional sends. Agents reference a template by id or
+        alias via <span className="mono">template: {"{ id, variables }"}</span> on send — the
+        published version renders server-side. Draft edits never affect sends until you publish.
+        Placeholders: <span className="mono">{"{{key}}"}</span> (HTML-escaped) and{" "}
+        <span className="mono">{"{{{key}}}"}</span> (raw).
       </p>
 
       <div className="tabs">
         {STATUS_FILTERS.map((s) => (
-          <button
-            key={s}
-            className={s === statusFilter ? "active" : ""}
-            onClick={() => setStatusFilter(s)}
-          >
+          <button key={s} className={s === statusFilter ? "active" : ""} onClick={() => setStatusFilter(s)}>
             {s}
           </button>
         ))}
       </div>
 
-      {error && <p className="error">{error}</p>}
-
       {visible.length === 0 ? (
         <div className="card empty">
           <h3>No templates</h3>
-          Create a reusable subject/body once, then send it with variables.
+          Create a template to send reusable transactional bodies.
         </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
@@ -123,8 +210,7 @@ export function TemplatesPage() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Subject</th>
-                <th>Variables</th>
+                <th>Alias</th>
                 <th>Status</th>
                 <th>Updated</th>
                 <th />
@@ -133,41 +219,30 @@ export function TemplatesPage() {
             <tbody>
               {visible.map((t) => (
                 <tr key={t.template_id}>
-                  <td className="mono">{t.name}</td>
-                  <td className="dim">{t.subject ?? "—"}</td>
+                  <td>{t.name}</td>
+                  <td className="mono dim">{t.alias ?? "—"}</td>
                   <td>
-                    {(t.variables ?? []).map((v) => (
-                      <span key={v.key} className="chip" style={{ marginRight: 4 }}>
-                        {v.key}
-                      </span>
-                    ))}
-                  </td>
-                  <td>
-                    <span className={`chip ${t.status === "published" ? "green" : ""}`}>
+                    <span className={`chip ${t.status === "published" ? "green" : "accent"}`}>
                       {t.status}
                     </span>
+                    {hasUnpublishedChanges(t) && (
+                      <span className="chip red" title="Draft edits are not in the published version">
+                        unpublished changes
+                      </span>
+                    )}
                   </td>
                   <td className="dim">{new Date(t.updated_at).toLocaleDateString()}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="btn sm" onClick={() => setEditing(t)}>
+                    <button className="btn sm" onClick={() => setPreview(t.template_id)}>
+                      View
+                    </button>{" "}
+                    <button className="btn sm" onClick={() => openEdit(t)}>
                       Edit
                     </button>{" "}
-                    {t.status !== "published" && (
-                      <>
-                        <button
-                          className="btn sm"
-                          disabled={busy === t.template_id + "publish"}
-                          onClick={() => void run(t.template_id, "publish")}
-                        >
-                          Publish
-                        </button>{" "}
-                      </>
-                    )}
-                    <button
-                      className="btn sm"
-                      disabled={busy === t.template_id + "duplicate"}
-                      onClick={() => void run(t.template_id, "duplicate")}
-                    >
+                    <button className="btn sm" disabled={busy} onClick={() => void publish(t)}>
+                      {t.published_at ? "Republish" : "Publish"}
+                    </button>{" "}
+                    <button className="btn sm" onClick={() => void duplicate(t)}>
                       Duplicate
                     </button>{" "}
                     <button className="btn sm danger" onClick={() => void remove(t)}>
@@ -181,14 +256,10 @@ export function TemplatesPage() {
         </div>
       )}
 
-      {editing && (
-        <TemplateModal
-          template={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-          onSaved={async () => {
-            setEditing(null);
-            await load();
-          }}
+      {preview && (
+        <TemplatePreview
+          template={templates.find((t) => t.template_id === preview) ?? null}
+          onClose={() => setPreview(null)}
         />
       )}
 
@@ -209,108 +280,166 @@ export function TemplatesPage() {
           ]}
         />
       )}
+
+      {editor && (
+        <div className="modal-backdrop" onClick={() => setEditor(null)}>
+          <div className="modal" style={{ width: "min(640px, 94vw)" }} onClick={(e) => e.stopPropagation()}>
+            <h2>{editor.templateId ? "Edit template" : "New template"}</h2>
+            <div className="field">
+              <label>Name</label>
+              <input
+                value={editor.name}
+                onChange={(e) => setEditor({ ...editor, name: e.target.value })}
+                placeholder="Receipt"
+              />
+            </div>
+            <div className="field">
+              <label>Alias (optional; callers can use it instead of the id)</label>
+              <input
+                value={editor.alias}
+                onChange={(e) => setEditor({ ...editor, alias: e.target.value })}
+                placeholder="receipt-v1"
+              />
+            </div>
+            <div className="field">
+              <label>Subject</label>
+              <input
+                value={editor.subject}
+                onChange={(e) => setEditor({ ...editor, subject: e.target.value })}
+                placeholder="Your receipt, {{order_id}}"
+              />
+            </div>
+            <div className="field">
+              <label>Text body</label>
+              <textarea
+                rows={4}
+                value={editor.text}
+                onChange={(e) => setEditor({ ...editor, text: e.target.value })}
+                placeholder={"Hi {{name}}, thanks for your order {{{order_id}}}."}
+              />
+            </div>
+            <div className="field">
+              <label>HTML body</label>
+              <textarea
+                rows={6}
+                value={editor.html}
+                onChange={(e) => setEditor({ ...editor, html: e.target.value })}
+                placeholder={"<p>Hi {{name}},</p><p>Total: {{total}}</p>"}
+              />
+            </div>
+            <div className="field">
+              <label>Variables</label>
+              {editor.vars.map((v, i) => (
+                <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <input
+                    style={{ flex: 2 }}
+                    value={v.key}
+                    placeholder="key"
+                    onChange={(e) => setVar(i, { key: e.target.value })}
+                  />
+                  <select
+                    style={{ flex: 1 }}
+                    value={v.type}
+                    onChange={(e) => setVar(i, { type: e.target.value as TemplateVariable["type"] })}
+                  >
+                    {VAR_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    style={{ flex: 3 }}
+                    value={v.fallback}
+                    placeholder="fallback (optional)"
+                    onChange={(e) => setVar(i, { fallback: e.target.value })}
+                  />
+                  <button
+                    className="btn sm danger"
+                    onClick={() =>
+                      setEditor({ ...editor, vars: editor.vars.filter((_, j) => j !== i) })
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                className="btn sm"
+                onClick={() =>
+                  setEditor({ ...editor, vars: [...editor.vars, { key: "", type: "string", fallback: "" }] })
+                }
+              >
+                + Add variable
+              </button>
+              <p className="dim" style={{ margin: "6px 0 0" }}>
+                Variables with no fallback are required at send time (missing → 400).
+              </p>
+            </div>
+            {error && <p className="error">{error}</p>}
+            <div className="foot">
+              <button className="btn" onClick={() => setEditor(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn primary"
+                disabled={busy || !editor.name.trim() || (!editor.text && !editor.html)}
+                onClick={() => void save()}
+              >
+                {busy ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function TemplateModal({
-  template,
-  onClose,
-  onSaved
-}: {
-  template: Template | null;
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-}) {
-  const [name, setName] = useState(template?.name ?? "");
-  const [subject, setSubject] = useState(template?.subject ?? "");
-  const [text, setText] = useState(template?.text ?? "");
-  const [html, setHtml] = useState(template?.html ?? "");
-  const [variables, setVariables] = useState(variablesToText(template?.variables));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    const body = {
-      name: name.trim(),
-      ...(subject.trim() ? { subject: subject.trim() } : {}),
-      ...(text.trim() ? { text } : {}),
-      ...(html.trim() ? { html } : {}),
-      variables: parseVariables(variables)
-    };
-    try {
-      if (template) {
-        await api(`/templates/${template.template_id}`, {
-          method: "PATCH",
-          body: JSON.stringify(body)
-        });
-      } else {
-        await api("/templates", { method: "POST", body: JSON.stringify(body) });
-      }
-      await onSaved();
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not save template");
-    } finally {
-      setBusy(false);
-    }
-  };
-
+function TemplatePreview({ template, onClose }: { template: Template | null; onClose: () => void }) {
+  if (!template) return null;
+  const body = template.published ?? template;
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ width: "min(640px, 94vw)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2>{template ? "Edit template" : "New template"}</h2>
-        <div className="field">
-          <label>Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="welcome" />
-        </div>
+      <div className="modal" style={{ width: "min(640px, 94vw)" }} onClick={(e) => e.stopPropagation()}>
+        <h2>{template.name}</h2>
+        <p className="dim">
+          {template.published
+            ? `Published ${new Date(template.published_at as string).toLocaleString()} — this is the version sends render.`
+            : "Draft — not yet published; sends will fail until it is."}
+        </p>
         <div className="field">
           <label>Subject</label>
-          <input
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="Welcome, {{name}}"
-          />
+          <div className="mono">{body.subject || "—"}</div>
         </div>
         <div className="field">
-          <label>Text body</label>
-          <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} />
+          <label>Text</label>
+          <pre className="mono" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+            {body.text ?? "—"}
+          </pre>
         </div>
         <div className="field">
-          <label>HTML body (optional)</label>
-          <textarea
-            rows={5}
-            className="mono"
-            value={html}
-            onChange={(e) => setHtml(e.target.value)}
-          />
+          <label>HTML</label>
+          <pre className="mono" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+            {body.html ?? "—"}
+          </pre>
         </div>
         <div className="field">
-          <label>Variables (one per line: key or key=fallback)</label>
-          <textarea
-            rows={3}
-            className="mono"
-            value={variables}
-            onChange={(e) => setVariables(e.target.value)}
-            placeholder={"name=there\nreceipt_url"}
-          />
+          <label>Variables</label>
+          {body.variables.length === 0 ? (
+            <div className="dim">none</div>
+          ) : (
+            body.variables.map((v) => (
+              <div key={v.key} className="mono dim">
+                {v.key}: {v.type}
+                {v.fallback_value !== undefined ? ` = ${JSON.stringify(v.fallback_value)}` : " (required)"}
+              </div>
+            ))
+          )}
         </div>
-        {error && <p className="error">{error}</p>}
         <div className="foot">
           <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="btn primary"
-            disabled={busy || !name.trim() || (!text.trim() && !html.trim())}
-            onClick={() => void save()}
-          >
-            {busy ? "Saving…" : template ? "Save" : "Create"}
+            Close
           </button>
         </div>
       </div>
