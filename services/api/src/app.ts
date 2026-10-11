@@ -16,6 +16,7 @@ import { pods } from "./routes/pods.js";
 import { share } from "./routes/share.js";
 import { suppressions } from "./routes/suppressions.js";
 import { threads } from "./routes/threads.js";
+import { tracking } from "./routes/tracking.js";
 import { usage } from "./routes/usage.js";
 import { webhooks } from "./routes/webhooks.js";
 
@@ -69,6 +70,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/v0", share);
   app.route("/v0", suppressions);
   app.route("/v0", threads);
+  app.route("/v0", tracking);
   app.route("/v0", usage);
   app.route("/v0", webhooks);
 

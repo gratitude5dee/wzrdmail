@@ -14,4 +14,8 @@ export interface Env {
    * short-lived WZRDMail identity and phone-verification handoffs.
    */
   MUSE_CONNECTOR_TOKEN?: string;
+  /** HMAC key signing open-pixel tokens and click-redirect signatures. */
+  TRACKING_SECRET?: string;
+  /** Public base URL tracking links point at (defaults to https://api.wzrd.tech/v0). */
+  TRACKING_BASE_URL?: string;
 }

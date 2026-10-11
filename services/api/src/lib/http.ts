@@ -89,6 +89,8 @@ export interface InboxRow {
   domain: string;
   display_name: string | null;
   client_id: string | null;
+  x_open_tracking: number;
+  x_click_tracking: number;
   created_at: string;
   updated_at: string;
 }
@@ -101,7 +103,8 @@ export async function requireInbox(
 ): Promise<InboxRow> {
   const inboxId = decodeURIComponent(rawInboxId).toLowerCase();
   const inbox = await c.env.DB.prepare(
-    `SELECT inbox_id, org_id, pod_id, username, domain, display_name, client_id, created_at, updated_at
+    `SELECT inbox_id, org_id, pod_id, username, domain, display_name, client_id,
+            x_open_tracking, x_click_tracking, created_at, updated_at
      FROM inboxes WHERE inbox_id = ? AND deleted_at IS NULL`
   )
     .bind(inboxId)

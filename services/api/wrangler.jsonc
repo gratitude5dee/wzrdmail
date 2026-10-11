@@ -8,7 +8,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "WZRDMAIL_ENV": "dev",
-    "BUILD_SHA": "dev"
+    "BUILD_SHA": "dev",
+    "TRACKING_BASE_URL": "http://localhost:8787/v0"
   },
   // Scheduled-send sweep + trash purge + webhook retry sweep + delivery-log retention.
   "triggers": {
@@ -36,7 +37,7 @@
   ],
   "env": {
     "staging": {
-      "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4" },
+      "vars": { "WZRDMAIL_ENV": "staging", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4", "TRACKING_BASE_URL": "https://staging.api.wzrd.tech/v0" },
       "workers_dev": true,
       "routes": [
         { "pattern": "staging.api.wzrd.tech", "custom_domain": true }
@@ -59,7 +60,7 @@
       "send_email": [{ "name": "EMAIL" }]
     },
     "production": {
-      "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4" },
+      "vars": { "WZRDMAIL_ENV": "prod", "BUILD_SHA": "unset", "THIRDWEB_CLIENT_ID": "f3a41a11153f2f75d55056f08c1d36d4", "TRACKING_BASE_URL": "https://api.wzrd.tech/v0" },
       "workers_dev": true,
       "routes": [{ "pattern": "api.wzrd.tech", "custom_domain": true }],
       "d1_databases": [
