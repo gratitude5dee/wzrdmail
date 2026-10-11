@@ -20,6 +20,13 @@ Docs worker: `npx wrangler dev --port 8789 --inspector-port 93xx` in `services/d
 
 When running api + docs + mcp dev servers together, give each a unique `--inspector-port` (default 9229 collides and workerd exits).
 
+## Outbound-send behavior in wrangler dev (important)
+
+- `send_email` bindings are only declared under `env.staging`/`env.production` in wrangler.jsonc, so `env.EMAIL` is undefined locally: `CloudflareEmailProvider.send` throws and **immediate sends always land in state `rejected` with HTTP 200** (see `egress/send.ts` doSend catch). This is expected — do not report it as a bug. To test the `sent` state or state-dependent guards, flip the row via `wrangler d1 execute wzrdmail-dev --local --command "UPDATE messages SET state='sent' WHERE msg_id='…'"`.
+- Sign-up creates orgs with `verified=0`, which restricts sends to the org's `human_email` only (`verify your account to email external recipients`). To send to arbitrary recipients locally: `UPDATE organizations SET verified=1 WHERE org_id='…'` via d1 execute — `authenticate()` reads `verified` per request, so it takes effect immediately.
+- Miniflare 3 does not auto-fire cron triggers (wrangler warns at startup): scheduled dispatch (`deliverDueScheduled`), trash purge, and webhook retry sweeps are not reachable via plain HTTP. Test those paths in unit tests or force rows due + call the sweep in vitest.
+- Other handy local seeds: `INSERT INTO suppressions (org_id,address,reason,created_at)` to force `suppressed_recipient` errors; raw MIME for a message is at `GET /v0/inboxes/{id}/messages/{msg_id}/raw` (stored in local R2), useful for asserting headers like `Reply-To`.
+
 ## Seeding test data (local D1)
 
 - Seed via `npx wrangler d1 execute wzrdmail-dev --local --command "..."` from `services/api` — it shares state with a running dev server.
@@ -29,4 +36,5 @@ When running api + docs + mcp dev servers together, give each a unique `--inspec
 - Authenticate requests with `Authorization: Bearer wm_admin_test` (or `x-api-key`). `permissions` is comma-separated (`read`, `send`, `admin`); read-only keys get 403 on send.
 
 ## Devin Secrets Needed
+
 None — all local.
