@@ -1,21 +1,65 @@
 import { useEffect, useState } from "react";
-import { api, type Metrics, type Usage } from "../api";
+import {
+  api,
+  apiAll,
+  type Inbox,
+  type Metrics,
+  type Pod,
+  type Usage
+} from "../api";
 import { ActivityChart, type ActivityPoint } from "../components/ActivityChart";
 import { CapacityBar } from "../components/CapacityBar";
 import { HealthRing } from "../components/HealthRing";
 
 const PERIODS = ["24h", "7d", "30d"] as const;
+const GRANULARITIES = ["auto", "hour", "day"] as const;
+const EVENT_TYPES = [
+  "message.received",
+  "message.sent",
+  "message.delivered",
+  "message.bounced",
+  "message.complained",
+  "message.rejected",
+  "message.scheduled",
+  "message.failed",
+  "message.cancelled",
+  "message.opened",
+  "message.clicked",
+  "domain.verified",
+  "domain.created",
+  "domain.deleted",
+  "domain.failed",
+  "suppression.added",
+  "suppression.removed"
+] as const;
 
 export function MetricsPage() {
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>("7d");
+  const [granularity, setGranularity] = useState<(typeof GRANULARITIES)[number]>("auto");
+  const [inboxId, setInboxId] = useState("");
+  const [podId, setPodId] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [inboxes, setInboxes] = useState<Inbox[]>([]);
+  const [pods, setPods] = useState<Pod[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
 
   useEffect(() => {
-    void api<Metrics>(`/metrics?period=${period}`).then(setMetrics).catch(() => setMetrics(null));
-  }, [period]);
+    const params = new URLSearchParams({ period });
+    if (granularity !== "auto") params.set("granularity", granularity);
+    if (inboxId) params.set("inbox_id", inboxId);
+    if (podId) params.set("pod_id", podId);
+    if (typeFilter) params.set("type", typeFilter);
+    void api<Metrics>(`/metrics?${params}`).then(setMetrics).catch(() => setMetrics(null));
+  }, [period, granularity, inboxId, podId, typeFilter]);
   useEffect(() => {
     void api<Usage>("/usage").then(setUsage).catch(() => setUsage(null));
+    void apiAll<Inbox>("/inboxes?limit=100", "inboxes")
+      .then(setInboxes)
+      .catch(() => setInboxes([]));
+    void apiAll<Pod>("/pods?limit=100", "pods")
+      .then(setPods)
+      .catch(() => setPods([]));
   }, []);
 
   const totals = metrics?.totals ?? {};
@@ -51,6 +95,40 @@ export function MetricsPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="actions" style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <select value={granularity} onChange={(e) => setGranularity(e.target.value as typeof granularity)}>
+          {GRANULARITIES.map((g) => (
+            <option key={g} value={g}>
+              granularity: {g}
+            </option>
+          ))}
+        </select>
+        <select value={inboxId} onChange={(e) => setInboxId(e.target.value)}>
+          <option value="">all inboxes</option>
+          {inboxes.map((inbox) => (
+            <option key={inbox.inbox_id} value={inbox.inbox_id}>
+              {inbox.inbox_id}
+            </option>
+          ))}
+        </select>
+        <select value={podId} onChange={(e) => setPodId(e.target.value)}>
+          <option value="">all pods</option>
+          {pods.map((pod) => (
+            <option key={pod.pod_id} value={pod.pod_id}>
+              {pod.name}
+            </option>
+          ))}
+        </select>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <option value="">all event types</option>
+          {EVENT_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="grid stats" style={{ marginBottom: 14 }}>

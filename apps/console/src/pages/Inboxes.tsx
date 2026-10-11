@@ -55,6 +55,25 @@ export function InboxesPage() {
     await load();
   };
 
+  const [editing, setEditing] = useState<Inbox | null>(null);
+
+  const saveEdit = async (
+    inbox: Inbox,
+    displayName: string,
+    openTracking: boolean,
+    clickTracking: boolean
+  ) => {
+    await api(`/inboxes/${encodeURIComponent(inbox.inbox_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        display_name: displayName,
+        x_open_tracking: openTracking,
+        x_click_tracking: clickTracking
+      })
+    });
+    await load();
+  };
+
   return (
     <div>
       <div className="page-head">
@@ -104,9 +123,21 @@ export function InboxesPage() {
                   <td>
                     <Link to={`/inboxes/${encodeURIComponent(inbox.inbox_id)}`}>{inbox.inbox_id}</Link>
                   </td>
-                  <td className="dim">{inbox.display_name ?? "—"}</td>
+                  <td className="dim">
+                    {inbox.display_name ?? "—"}
+                    {(inbox.x_open_tracking || inbox.x_click_tracking) && (
+                      <span className="chip" style={{ marginLeft: 6 }}>
+                        tracking {inbox.x_open_tracking ? "open" : ""}
+                        {inbox.x_open_tracking && inbox.x_click_tracking ? "+" : ""}
+                        {inbox.x_click_tracking ? "click" : ""}
+                      </span>
+                    )}
+                  </td>
                   <td className="dim">{new Date(inbox.created_at).toLocaleDateString()}</td>
-                  <td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn sm" onClick={() => setEditing(inbox)}>
+                      Edit
+                    </button>{" "}
                     <button className="btn sm danger" onClick={() => void remove(inbox)}>
                       Delete
                     </button>
@@ -148,6 +179,17 @@ export function InboxesPage() {
         </div>
       )}
 
+      {editing && (
+        <EditInboxModal
+          inbox={editing}
+          onClose={() => setEditing(null)}
+          onSave={async (displayName, openTracking, clickTracking) => {
+            await saveEdit(editing, displayName, openTracking, clickTracking);
+            setEditing(null);
+          }}
+        />
+      )}
+
       {showApi && (
         <UseApiDrawer
           onClose={() => setShowApi(false)}
@@ -162,6 +204,78 @@ export function InboxesPage() {
           ]}
         />
       )}
+    </div>
+  );
+}
+
+function EditInboxModal({
+  inbox,
+  onClose,
+  onSave
+}: {
+  inbox: Inbox;
+  onClose: () => void;
+  onSave: (displayName: string, openTracking: boolean, clickTracking: boolean) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(inbox.display_name ?? "");
+  const [openTracking, setOpenTracking] = useState(Boolean(inbox.x_open_tracking));
+  const [clickTracking, setClickTracking] = useState(Boolean(inbox.x_click_tracking));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(displayName, openTracking, clickTracking);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "could not save inbox");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Edit inbox</h2>
+        <p className="dim mono">{inbox.inbox_id}</p>
+        <div className="field">
+          <label>Display name</label>
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Tracking</label>
+          <label style={{ display: "inline-flex", gap: 4, marginRight: 12 }}>
+            <input
+              type="checkbox"
+              checked={openTracking}
+              onChange={(e) => setOpenTracking(e.target.checked)}
+            />
+            open tracking
+          </label>
+          <label style={{ display: "inline-flex", gap: 4 }}>
+            <input
+              type="checkbox"
+              checked={clickTracking}
+              onChange={(e) => setClickTracking(e.target.checked)}
+            />
+            click tracking
+          </label>
+          <div className="dim">
+            Open tracking adds a 1px image; click tracking rewrites links through the redirect
+            endpoint.
+          </div>
+        </div>
+        {error && <p className="error">{error}</p>}
+        <div className="foot">
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

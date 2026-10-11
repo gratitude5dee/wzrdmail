@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { ApiRequestError, api, apiAll, type Webhook, type WebhookDelivery } from "../api";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import {
+  ApiRequestError,
+  api,
+  apiAll,
+  type EventEnvelope,
+  type Webhook,
+  type WebhookDelivery
+} from "../api";
 import { UseApiDrawer } from "../components/UseApiDrawer";
 
 const EVENT_CATALOG: { type: string; description: string }[] = [
@@ -9,7 +16,17 @@ const EVENT_CATALOG: { type: string; description: string }[] = [
   { type: "message.bounced", description: "A DSN reported a permanent delivery failure." },
   { type: "message.complained", description: "An ARF report marked the message as spam." },
   { type: "message.rejected", description: "The message was rejected before sending." },
-  { type: "domain.verified", description: "A custom domain finished DNS verification." }
+  { type: "message.scheduled", description: "A send was scheduled or rescheduled for later." },
+  { type: "message.failed", description: "A dispatch settled as permanently failed." },
+  { type: "message.cancelled", description: "A scheduled send was cancelled." },
+  { type: "message.opened", description: "A tracked open pixel was loaded." },
+  { type: "message.clicked", description: "A tracked link was clicked." },
+  { type: "domain.verified", description: "A custom domain finished DNS verification." },
+  { type: "domain.created", description: "A custom domain was added." },
+  { type: "domain.deleted", description: "A custom domain was removed." },
+  { type: "domain.failed", description: "A custom domain failed DNS verification." },
+  { type: "suppression.added", description: "A recipient was suppressed (bounce/complaint/manual)." },
+  { type: "suppression.removed", description: "A recipient was removed from suppressions." }
 ];
 
 const TABS = ["Endpoints", "Event Catalog"] as const;
@@ -23,6 +40,7 @@ export function WebhooksPage() {
   const [events, setEvents] = useState<string[]>([]);
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [logHook, setLogHook] = useState<Webhook | null>(null);
 
@@ -62,6 +80,21 @@ export function WebhooksPage() {
     await load();
   };
 
+  const rotateSecret = async (hook: Webhook) => {
+    if (!window.confirm(`Rotate the signing secret for ${hook.url}? The old secret stops working immediately.`))
+      return;
+    setPageError(null);
+    try {
+      const res = await api<{ secret: string }>(`/webhooks/${hook.webhook_id}/rotate-secret`, {
+        method: "POST",
+        body: "{}"
+      });
+      setSecret(res.secret);
+    } catch (err) {
+      setPageError(err instanceof ApiRequestError ? err.message : "could not rotate secret");
+    }
+  };
+
   const remove = async (hook: Webhook) => {
     if (!window.confirm(`Delete webhook to ${hook.url}?`)) return;
     await api(`/webhooks/${hook.webhook_id}`, { method: "DELETE" });
@@ -89,6 +122,12 @@ export function WebhooksPage() {
           </button>
         ))}
       </div>
+
+      {pageError && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <span className="chip red">error</span> {pageError}
+        </div>
+      )}
 
       {tab === "Endpoints" &&
         (hooks.length === 0 ? (
@@ -132,6 +171,9 @@ export function WebhooksPage() {
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button className="btn sm" onClick={() => setLogHook(hook)}>
                         Deliveries
+                      </button>{" "}
+                      <button className="btn sm" onClick={() => void rotateSecret(hook)}>
+                        Rotate secret
                       </button>{" "}
                       <button className="btn sm" onClick={() => void toggle(hook)}>
                         {hook.enabled ? "Disable" : "Enable"}
@@ -254,31 +296,77 @@ export function WebhooksPage() {
 }
 
 const STATUS_FILTERS = ["all", "pending", "success", "failed"] as const;
+const LOG_TABS = ["Deliveries", "Events"] as const;
+
+/** Lazily loads the event payload behind a delivery or event row. */
+function EventPayload({ webhookId, eventId }: { webhookId: string; eventId: string }) {
+  const [event, setEvent] = useState<EventEnvelope | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<EventEnvelope>(
+      `/webhooks/${encodeURIComponent(webhookId)}/events/${encodeURIComponent(eventId)}`
+    )
+      .then((res) => {
+        if (!cancelled) setEvent(res);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setError(err instanceof ApiRequestError ? err.message : "could not load event");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [webhookId, eventId]);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!event) return <p className="dim">Loading event…</p>;
+  return <pre className="code">{JSON.stringify(event, null, 2)}</pre>;
+}
 
 function DeliveryLogModal({ hook, onClose }: { hook: Webhook; onClose: () => void }) {
+  const [tab, setTab] = useState<(typeof LOG_TABS)[number]>("Deliveries");
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
+  const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("all");
   const [loading, setLoading] = useState(true);
   const [redelivering, setRedelivering] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const query = statusFilter === "all" ? "" : `&status=${statusFilter}`;
-      setDeliveries(
-        await apiAll<WebhookDelivery>(
-          `/webhooks/${hook.webhook_id}/deliveries?limit=100${query}`,
-          "deliveries"
-        )
-      );
+      if (tab === "Events") {
+        setEvents(
+          await apiAll<EventEnvelope>(
+            `/webhooks/${hook.webhook_id}/events?limit=100`,
+            "events"
+          )
+        );
+      } else {
+        const query = statusFilter === "all" ? "" : `&status=${statusFilter}`;
+        setDeliveries(
+          await apiAll<WebhookDelivery>(
+            `/webhooks/${hook.webhook_id}/deliveries?limit=100${query}`,
+            "deliveries"
+          )
+        );
+      }
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "could not load deliveries");
+      setError(
+        err instanceof ApiRequestError
+          ? err.message
+          : tab === "Events"
+            ? "could not load events"
+            : "could not load deliveries"
+      );
     } finally {
       setLoading(false);
     }
-  }, [hook.webhook_id, statusFilter]);
+  }, [hook.webhook_id, statusFilter, tab]);
 
   useEffect(() => {
     void load();
@@ -307,22 +395,76 @@ function DeliveryLogModal({ hook, onClose }: { hook: Webhook; onClose: () => voi
         style={{ width: "min(860px, 94vw)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2>Deliveries</h2>
+        <h2>Deliveries &amp; events</h2>
         <p className="dim mono">{hook.url}</p>
         <div className="tabs">
-          {STATUS_FILTERS.map((s) => (
-            <button
-              key={s}
-              className={s === statusFilter ? "active" : ""}
-              onClick={() => setStatusFilter(s)}
-            >
-              {s}
+          {LOG_TABS.map((t) => (
+            <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>
+              {t}
             </button>
           ))}
         </div>
+        {tab === "Deliveries" && (
+          <div className="tabs">
+            {STATUS_FILTERS.map((s) => (
+              <button
+                key={s}
+                className={s === statusFilter ? "active" : ""}
+                onClick={() => setStatusFilter(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
         {error && <p className="error">{error}</p>}
         {loading ? (
           <p className="dim">Loading…</p>
+        ) : tab === "Events" ? (
+          events.length === 0 ? (
+            <p className="dim">No events match this endpoint&apos;s filters yet.</p>
+          ) : (
+            <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Inbox</th>
+                    <th>Time</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.map((ev) => (
+                    <Fragment key={ev.event_id}>
+                      <tr>
+                        <td className="mono">{ev.type}</td>
+                        <td className="dim">{ev.inbox_id ?? "—"}</td>
+                        <td className="dim">{new Date(ev.created_at).toLocaleString()}</td>
+                        <td>
+                          <button
+                            className="btn sm"
+                            onClick={() =>
+                              setExpanded(expanded === ev.event_id ? null : ev.event_id)
+                            }
+                          >
+                            {expanded === ev.event_id ? "Hide" : "Payload"}
+                          </button>
+                        </td>
+                      </tr>
+                      {expanded === ev.event_id && (
+                        <tr>
+                          <td colSpan={4}>
+                            <EventPayload webhookId={hook.webhook_id} eventId={ev.event_id} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : deliveries.length === 0 ? (
           <p className="dim">No deliveries yet.</p>
         ) : (
@@ -340,35 +482,52 @@ function DeliveryLogModal({ hook, onClose }: { hook: Webhook; onClose: () => voi
               </thead>
               <tbody>
                 {deliveries.map((d) => (
-                  <tr key={d.delivery_id}>
-                    <td>
-                      <span
-                        className={`chip ${
-                          d.status === "success" ? "green" : d.status === "failed" ? "red" : ""
-                        }`}
-                      >
-                        {d.status}
-                      </span>
-                    </td>
-                    <td className="mono">{d.event_type}</td>
-                    <td className="dim">
-                      {d.response_status ?? (d.error ? d.error : "—")}
-                    </td>
-                    <td className="dim">
-                      {d.attempt}
-                      {d.manual ? " (manual)" : ""}
-                    </td>
-                    <td className="dim">{new Date(d.created_at).toLocaleString()}</td>
-                    <td>
-                      <button
-                        className="btn sm"
-                        disabled={redelivering !== null || d.status === "pending"}
-                        onClick={() => void redeliver(d)}
-                      >
-                        {redelivering === d.delivery_id ? "Sending…" : "Redeliver"}
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key={d.delivery_id}>
+                    <tr>
+                      <td>
+                        <span
+                          className={`chip ${
+                            d.status === "success" ? "green" : d.status === "failed" ? "red" : ""
+                          }`}
+                        >
+                          {d.status}
+                        </span>
+                      </td>
+                      <td className="mono">{d.event_type}</td>
+                      <td className="dim">
+                        {d.response_status ?? (d.error ? d.error : "—")}
+                      </td>
+                      <td className="dim">
+                        {d.attempt}
+                        {d.manual ? " (manual)" : ""}
+                      </td>
+                      <td className="dim">{new Date(d.created_at).toLocaleString()}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button
+                          className="btn sm"
+                          onClick={() =>
+                            setExpanded(expanded === d.delivery_id ? null : d.delivery_id)
+                          }
+                        >
+                          {expanded === d.delivery_id ? "Hide" : "Payload"}
+                        </button>{" "}
+                        <button
+                          className="btn sm"
+                          disabled={redelivering !== null || d.status === "pending"}
+                          onClick={() => void redeliver(d)}
+                        >
+                          {redelivering === d.delivery_id ? "Sending…" : "Redeliver"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded === d.delivery_id && (
+                      <tr>
+                        <td colSpan={6}>
+                          <EventPayload webhookId={hook.webhook_id} eventId={d.event_id} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
