@@ -10,7 +10,8 @@ type ToolCallResult = {
 type Inbox = {
   inbox_id: string;
   display_name?: string | null;
-  inbox: string;
+  username?: string;
+  domain?: string;
 };
 
 type Message = {
@@ -19,7 +20,7 @@ type Message = {
   subject?: string | null;
   from: string;
   to?: string[];
-  received_at?: string;
+  created_at?: string;
   text?: string | null;
 };
 
@@ -90,7 +91,7 @@ let messages: Message[] = [];
 let drafts: Draft[] = [];
 
 const inboxLabel = (inbox: Inbox): string =>
-  inbox.display_name?.trim() || inbox.inbox;
+  inbox.display_name?.trim() || inbox.inbox_id;
 
 const time = (iso?: string): string => {
   if (!iso) return "";
@@ -135,7 +136,7 @@ const renderMessages = () => {
         <button class="row" data-mid="${esc(m.message_id)}">
           <span class="from">${esc(m.from)}</span>
           <span class="subject">${esc(m.subject ?? "(no subject)")}</span>
-          <span class="time">${esc(time(m.received_at))}</span>
+          <span class="time">${esc(time(m.created_at))}</span>
         </button>
       </li>`
           )
@@ -163,7 +164,7 @@ const renderDetail = (m: Message) => {
   $("detail-subject").textContent = m.subject ?? "(no subject)";
   $("detail-from").textContent = m.from;
   $("detail-to").textContent = (m.to ?? []).join(", ");
-  $("detail-time").textContent = time(m.received_at);
+  $("detail-time").textContent = time(m.created_at);
   // Text only — never inject remote HTML into a sandboxed app.
   $("detail-body").textContent =
     m.text?.trim() || "(message body not available inline)";
@@ -176,7 +177,7 @@ const loadInboxes = async (): Promise<void> => {
   if (!activeInboxId) {
     const wanted = settings.default_inbox;
     const found = inboxes.find(
-      (i) => i.inbox === wanted || i.inbox_id === wanted
+      (i) => i.inbox_id === wanted || `${i.username}@${i.domain}` === wanted
     );
     activeInboxId = (found ?? inboxes[0])?.inbox_id ?? null;
   }
@@ -303,10 +304,14 @@ app.ontoolresult = (params) => {
     const data = unwrap(params);
     const obj = (typeof data === "object" && data !== null ? data : {}) as {
       message?: Message;
+      message_id?: string;
       values?: Settings;
       inboxes?: Inbox[];
     };
+    // get_message returns a flat message object; a {message:…} wrap is
+    // tolerated for other tools.
     if (obj.message) renderDetail(obj.message);
+    else if (obj.message_id) renderDetail(obj as unknown as Message);
     if (obj.values) applySettings(obj.values);
     if (obj.inboxes) {
       inboxes = obj.inboxes;
