@@ -35,6 +35,35 @@ When running api + docs + mcp dev servers together, give each a unique `--inspec
   `python3 -c "import hashlib;print(hashlib.sha256(b'wm_admin_test').hexdigest())"`.
 - Authenticate requests with `Authorization: Bearer wm_admin_test` (or `x-api-key`). `permissions` is comma-separated (`read`, `send`, `admin`); read-only keys get 403 on send.
 
+## Domain verification tests
+
+- `POST /v0/domains` enforces `PLANS[plan].customDomains` — `free` allows **0**, so any
+  domain test must seed `organizations.plan` to `developer`/`startup`/`enterprise` or
+  create returns `plan_limit_exceeded`.
+- `POST /v0/domains/:id/verify` performs **real DNS-over-HTTPS** calls to
+  `cloudflare-dns.com` from inside the worker — it needs outbound network. A domain on
+  the reserved `.invalid` TLD (e.g. `neverresolves-<rand>.invalid`) always NXDOMAINs:
+  all three checks fail → `status:"failed"` + `failure_reason` in the response and in
+  the emitted `domain.failed` event payload.
+- `domain.verified`/`domain.failed` events emit exactly once per transition (guarded
+  `INSERT ... WHERE status != ?`); re-verifying does not duplicate the event row.
+
+## Checking `events` rows after API calls
+
+`npx wrangler d1 execute wzrdmail-dev --local --command "SELECT type, payload FROM events WHERE org_id='...' ORDER BY created_at"` — `payload` is the full event envelope JSON (`.data` holds the resource payload).
+
+## Exercising sdk-ts against a live worker
+
+`packages/sdk-ts` has no build output (`tsc --noEmit` only) and its sources import
+`./x.js` specifiers that plain `node` cannot resolve to `.ts`. To run the SDK against a
+live API, drop a temp vitest file in `packages/sdk-ts/test/` (vite resolves `.js`→`.ts`)
+and run `npx vitest run test/<file>.test.ts` from that package; delete the file after.
+
+## sdk-python live calls
+
+`(cd sdk-python && uv run python script.py)` — client class is `WzrdMail`
+(`from wzrdmail import WzrdMail`), constructed as `WzrdMail(api_key=..., base_url='http://localhost:8787')`.
+
 ## Devin Secrets Needed
 
 None — all local.

@@ -337,7 +337,7 @@ export const Draft = z.object({
   subject: z.string().default(""),
   text: z.string().nullable().optional(),
   html: z.string().nullable().optional(),
-  reply_to: z.string().nullable().optional(),
+  reply_to: ReplyTo.nullable().optional(),
   headers: z.record(z.string()).default({}),
   labels: z.array(z.string()).default([]),
   in_reply_to: z.string().nullable().optional(),
@@ -370,7 +370,7 @@ export const UpdateDraftInput = z.object({
   subject: z.string().max(998).optional(),
   text: z.string().nullable().optional(),
   html: z.string().nullable().optional(),
-  reply_to: z.string().email().nullable().optional(),
+  reply_to: ReplyTo.nullable().optional(),
   headers: z.record(z.string()).optional(),
   labels: z.array(z.string()).optional(),
   in_reply_to: z.string().nullable().optional()

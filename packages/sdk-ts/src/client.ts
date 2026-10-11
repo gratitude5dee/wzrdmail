@@ -36,6 +36,9 @@ import type {
   ListParams,
   ListResponse,
   ListSuppressionsParams,
+  Metrics,
+  MetricsParams,
+  PlanUsage,
   Pod,
   ReplyMessageInput,
   RotateWebhookSecretResult,
@@ -661,12 +664,30 @@ class AuthResource {
 class MetricsResource {
   constructor(private readonly http: HttpClient) {}
 
+  /** `GET /v0/metrics` — bucketed event-count aggregates (spec §4 filters). */
+  get(params: MetricsParams = {}): Promise<Metrics> {
+    return this.http.request({
+      method: "GET",
+      path: "/v0/metrics",
+      query: { ...params }
+    });
+  }
+
   usage(params: { month?: string } = {}): Promise<Usage> {
     return this.http.request({
       method: "GET",
       path: "/v0/metrics/usage",
       query: { ...params }
     });
+  }
+}
+
+class UsageResource {
+  constructor(private readonly http: HttpClient) {}
+
+  /** `GET /v0/usage` — current-month plan counters. */
+  get(): Promise<PlanUsage> {
+    return this.http.request({ method: "GET", path: "/v0/usage" });
   }
 }
 
@@ -683,6 +704,7 @@ export class WzrdMailClient {
   readonly apiKeys: ApiKeysResource;
   readonly auth: AuthResource;
   readonly metrics: MetricsResource;
+  readonly usage: UsageResource;
   readonly suppressions: SuppressionsResource;
   readonly templates: TemplatesResource;
 
@@ -696,6 +718,7 @@ export class WzrdMailClient {
     this.apiKeys = new ApiKeysResource(http);
     this.auth = new AuthResource(http);
     this.metrics = new MetricsResource(http);
+    this.usage = new UsageResource(http);
     this.suppressions = new SuppressionsResource(http);
     this.templates = new TemplatesResource(http);
   }

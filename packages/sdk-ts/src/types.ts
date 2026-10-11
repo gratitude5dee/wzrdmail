@@ -281,6 +281,48 @@ export interface Usage {
   metrics: UsageMetric[];
 }
 
+/** `GET /v0/metrics` params (spec §4): period sets the default span and
+ * granularity; since/until bound the window; type/inbox_id/pod_id filter the
+ * counted events. `type` accepts a comma-separated list on the wire. */
+export interface MetricsParams {
+  period?: "24h" | "7d" | "30d";
+  granularity?: "hour" | "day";
+  since?: string;
+  until?: string;
+  type?: string;
+  inbox_id?: string;
+  pod_id?: string;
+}
+
+export interface MetricsPoint {
+  bucket: string;
+  type: string;
+  count: number;
+}
+
+/** `GET /v0/metrics` — event-count aggregates bucketed for charts. */
+export interface Metrics {
+  period: string;
+  granularity: string;
+  since: string;
+  until: string;
+  totals: Record<string, number>;
+  series: MetricsPoint[];
+}
+
+/** `GET /v0/usage` per-metric counter vs plan limit (null = uncapped). */
+export interface UsageCounter {
+  used: number;
+  limit: number | null;
+}
+
+/** `GET /v0/usage` — plan counters for the current month. */
+export interface PlanUsage {
+  plan: string;
+  month: string;
+  usage: Record<string, UsageCounter>;
+}
+
 export interface AgentSignUpResponse {
   api_key: string;
   inbox_id: string;

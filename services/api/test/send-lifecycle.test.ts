@@ -24,12 +24,19 @@ class StubProvider implements MailProvider {
   }
 }
 
-async function seedKey(orgId: string): Promise<string> {
+async function seedKey(orgId: string, permissions = "admin"): Promise<string> {
   const key = `wm_test_${crypto.randomUUID().replaceAll("-", "")}`;
   await env.DB.prepare(
-    "INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, created_at) VALUES (?, ?, NULL, ?, ?, 'admin', ?)"
+    "INSERT INTO api_keys (key_id, org_id, pod_id, key_hash, key_prefix, permissions, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?)"
   )
-    .bind(`key_${crypto.randomUUID().slice(0, 8)}`, orgId, await hashApiKey(key), key.slice(0, 12), NOW)
+    .bind(
+      `key_${crypto.randomUUID().slice(0, 8)}`,
+      orgId,
+      await hashApiKey(key),
+      key.slice(0, 12),
+      permissions,
+      NOW
+    )
     .run();
   return key;
 }
@@ -201,6 +208,44 @@ describe("send lifecycle", () => {
     const patchedBody = (await patched.json()) as { state: string; send_at: string };
     expect(patchedBody.state).toBe("scheduled");
     expect(patchedBody.send_at).toBe(newWhen);
+  });
+
+  it("lets a send-scoped key cancel and reschedule, but not relabel (spec §4)", async () => {
+    const inbox = await seedInbox({ address: `r9-${crypto.randomUUID().slice(0, 6)}@wzrd.tech` });
+    const sendOnly = await seedKey(inbox.org_id, "send");
+    const msg = await scheduledMessage(sendOnly, inbox.inbox_id);
+
+    const cancelled = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/${msg.message_id}/cancel`,
+      authed(sendOnly, { method: "POST" }),
+      env
+    );
+    expect(cancelled.status).toBe(200);
+
+    const rearmed = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/${msg.message_id}`,
+      authed(sendOnly, {
+        method: "PATCH",
+        body: JSON.stringify({ send_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString() })
+      }),
+      env
+    );
+    expect(rearmed.status).toBe(200);
+    expect(((await rearmed.json()) as { state: string }).state).toBe("scheduled");
+
+    // Label/read edits are mailbox administration: still admin-only.
+    const relabel = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/${msg.message_id}`,
+      authed(sendOnly, { method: "PATCH", body: JSON.stringify({ labels: ["flagged"] }) }),
+      env
+    );
+    expect(relabel.status).toBe(403);
+    const markRead = await app.request(
+      `/v0/inboxes/${encodeURIComponent(inbox.inbox_id)}/messages/${msg.message_id}`,
+      authed(sendOnly, { method: "PATCH", body: JSON.stringify({ read: true }) }),
+      env
+    );
+    expect(markRead.status).toBe(403);
   });
 
   it("rejects cancel for a sent message and reschedule for a past send_at", async () => {

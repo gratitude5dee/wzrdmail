@@ -20,7 +20,7 @@ import {
   requireInbox,
   type InboxRow
 } from "../lib/http.js";
-import { draftJson, type DraftRow } from "../lib/serialize.js";
+import { draftJson, parseReplyTo, serializeReplyTo, type DraftRow } from "../lib/serialize.js";
 
 export const drafts = new Hono<{ Bindings: Env }>();
 
@@ -72,7 +72,7 @@ drafts.post("/inboxes/:inbox_id/drafts", async (c) => {
           input.subject ?? "",
           input.text ?? null,
           input.html ?? null,
-          input.reply_to ?? null,
+          serializeReplyTo(input.reply_to),
           JSON.stringify(input.headers ?? {}),
           JSON.stringify(input.labels ?? []),
           input.client_id ?? null,
@@ -143,7 +143,7 @@ drafts.patch("/inboxes/:inbox_id/drafts/:draft_id", async (c) => {
       patch.subject !== undefined ? patch.subject : row.subject,
       patch.text !== undefined ? patch.text : row.text,
       patch.html !== undefined ? patch.html : row.html,
-      patch.reply_to !== undefined ? patch.reply_to : row.reply_to,
+      patch.reply_to !== undefined ? serializeReplyTo(patch.reply_to) : row.reply_to,
       patch.headers !== undefined ? JSON.stringify(patch.headers) : row.headers,
       patch.labels !== undefined ? JSON.stringify(patch.labels) : row.labels,
       patch.in_reply_to !== undefined ? patch.in_reply_to : row.in_reply_to,
@@ -195,7 +195,7 @@ drafts.post("/inboxes/:inbox_id/drafts/:draft_id/send", async (c) => {
     subject: row.subject,
     text: row.text ?? undefined,
     html: row.html ?? undefined,
-    reply_to: row.reply_to ?? undefined,
+    reply_to: parseReplyTo(row.reply_to) ?? undefined,
     headers,
     labels: JSON.parse(row.labels) as string[],
     // Draft sends are idempotent per draft identity: every send of a draft
